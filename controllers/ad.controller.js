@@ -680,6 +680,14 @@ const buildLocationFilter = (locationText) => {
   return { location: { $regex: escapeRegex(searchString), $options: "i" } };
 };
 
+const AD_SORTS = {
+  newest: { createdAt: -1, _id: -1 },
+  oldest: { createdAt: 1, _id: 1 },
+  price_low: { price: 1, createdAt: -1, _id: -1 },
+  price_high: { price: -1, createdAt: -1, _id: -1 },
+  most_viewed: { views: -1, createdAt: -1, _id: -1 },
+};
+
 export const getAllAds = async (req, res) => {
   try {
     // Pagination params
@@ -694,6 +702,10 @@ export const getAllAds = async (req, res) => {
     const locationText = req.body.location || null;
     const priceMin = req.body.priceMin != null ? Number(req.body.priceMin) : null;
     const priceMax = req.body.priceMax != null ? Number(req.body.priceMax) : null;
+    const sortKey = Object.prototype.hasOwnProperty.call(AD_SORTS, req.body.sort)
+      ? req.body.sort
+      : "newest";
+    const sort = AD_SORTS[sortKey];
     console.log(userId)
     let filter = {};
     // Resolve category name to ObjectId if provided
@@ -743,14 +755,14 @@ export const getAllAds = async (req, res) => {
         { path: "seller", select: PUBLIC_TRUST_SELECT },
         { path: "category", select: "name description" }
       ])
-      .sort({ createdAt: -1, _id: -1 });
+      .sort(sort);
     } else {
       ads = await Ad.find(filter)
       .populate([
         { path: "seller", select: PUBLIC_TRUST_SELECT },
         { path: "category", select: "name description" }
       ])
-      .sort({ createdAt: -1, _id: -1 })
+      .sort(sort)
       .skip(skip)
       .limit(limit);
     }
