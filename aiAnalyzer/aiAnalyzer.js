@@ -645,43 +645,35 @@ export async function extractAdFromImages({ images, categories }) {
     return { name: c.name, subCategories: subs };
   });
 
+  // Compact catalog — large pretty JSON + vision often breaks Groq json mode
   const catalogText = categoryCatalog.length
-    ? JSON.stringify(categoryCatalog)
-    : '[]';
+    ? categoryCatalog
+        .map((c) => {
+          const subs = (c.subCategories || []).slice(0, 20).join('|');
+          return subs ? `${c.name}[${subs}]` : c.name;
+        })
+        .join('; ')
+    : '(none)';
 
   const systemPrompt = `You are a marketplace listing assistant for Dealr (India classifieds).
-Analyze product photos and return ONLY a JSON object that drafts an ad form.
+Analyze product photos and reply with a single JSON object only.
+No markdown fences, no commentary, no thinking tags.
 
 Rules:
-- Use ONLY what is visible or clearly readable in the images (labels, logos, model text).
-- Never invent brand, model, storage, year, or condition you cannot see.
-- Never include price or location — those are always left null.
-- category MUST be an exact name from the provided catalog when possible; otherwise null.
-- subCategory MUST be an exact subcategory under that category when possible; otherwise null or "".
-- title: short, specific listing title (max ~80 chars), no emoji, no price.
-- description: natural seller voice, 150–280 characters, only visible facts. No hype, no "perfect condition" unless clearly visible.
-- confidence values are 0–1 floats for title, category, subCategory, description.
-- If unsure about a field, set the value to null/"" and confidence below 0.6.
-- Return JSON only.`;
+- Use ONLY what is visible or clearly readable in the images.
+- Never invent brand/model/year/condition you cannot see.
+- Never set price or location (omit them).
+- category must match an allowed category name exactly, or null.
+- subCategory must match an allowed subcategory under that category, or null.
+- title: short, specific, max 80 chars, no emoji, no price.
+- description: natural seller voice, 150-280 chars, visible facts only.
+- confidence values are numbers from 0 to 1.
+- If unsure, use null and confidence below 0.6.`;
 
-  const userText = `Allowed categories (JSON):
-${catalogText}
+  const userText = `Allowed categories: ${catalogText}
 
-Return this exact JSON shape:
-{
-  "title": "string or null",
-  "category": "exact catalog name or null",
-  "subCategory": "exact subcategory or null",
-  "description": "string or null",
-  "visibleAttributes": { "Brand": "...", "Condition": "..." },
-  "confidence": {
-    "title": 0.0,
-    "category": 0.0,
-    "subCategory": 0.0,
-    "description": 0.0
-  },
-  "notes": "brief uncertainty note or empty string"
-}`;
+Return JSON with this shape:
+{"title":null,"category":null,"subCategory":null,"description":null,"visibleAttributes":{},"confidence":{"title":0,"category":0,"subCategory":0,"description":0},"notes":""}`;
 
   const content = [
     { type: 'text', text: userText },
@@ -693,41 +685,22 @@ Return this exact JSON shape:
     })),
   ];
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: VISION_MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content },
-      ],
-      temperature: 0.2,
-      max_tokens: 900,
-      response_format: { type: 'json_object' },
-    }),
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content },
+  ];
+
+  // Avoid Groq json_object mode with vision/reasoning models — it often
+  // returns json_validate_failed. Parse JSON from free-form output instead.
+  const raw = await callGroqVision({
+    apiKey: GROQ_API_KEY,
+    model: VISION_MODEL,
+    messages,
   });
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(`Groq vision error: ${errorData.error?.message || response.statusText}`);
-  }
-
-  const data = await response.json();
-  const raw = data.choices?.[0]?.message?.content || '';
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
+  const parsed = parseVisionJson(raw);
+  if (!parsed) {
     throw new Error('No valid JSON in vision response');
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonMatch[0]);
-  } catch {
-    throw new Error('Failed to parse vision JSON');
   }
 
   const confidence = {
@@ -767,6 +740,117 @@ Return this exact JSON shape:
   }
 
   return draft;
+}
+
+async function callGroqVision({ apiKey, model, messages }) {
+  const attempts = [
+    // Prefer free-form + reasoning disabled (json_object often fails on Qwen vision)
+    {
+      label: 'plain+hidden',
+      body: {
+        model,
+        messages,
+        temperature: 0.1,
+        max_tokens: 1600,
+        reasoning_format: 'hidden',
+        reasoning_effort: 'none',
+      },
+    },
+    {
+      label: 'json+hidden',
+      body: {
+        model,
+        messages,
+        temperature: 0.1,
+        max_tokens: 1200,
+        response_format: { type: 'json_object' },
+        reasoning_format: 'hidden',
+        reasoning_effort: 'none',
+      },
+    },
+    {
+      label: 'plain',
+      body: {
+        model,
+        messages,
+        temperature: 0.1,
+        max_tokens: 2000,
+      },
+    },
+  ];
+
+  let lastError = 'Unknown Groq vision error';
+
+  for (const attempt of attempts) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(attempt.body),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        const failedGen = data.error?.failed_generation;
+        if (typeof failedGen === 'string' && failedGen.trim()) {
+          const recovered = parseVisionJson(failedGen);
+          if (recovered) {
+            console.log(`🖼️ Vision recovered JSON from failed_generation (${attempt.label})`);
+            return JSON.stringify(recovered);
+          }
+        }
+        lastError = data.error?.message || response.statusText || lastError;
+        console.warn(`🖼️ Vision attempt ${attempt.label} failed:`, lastError);
+        continue;
+      }
+
+      const content = String(data.choices?.[0]?.message?.content || '').trim();
+      if (content && parseVisionJson(content)) {
+        return content;
+      }
+      if (content) {
+        lastError = 'Vision returned non-JSON content';
+        console.warn(`🖼️ Vision attempt ${attempt.label}: content not parseable`);
+        continue;
+      }
+      lastError = 'Empty vision response';
+    } catch (err) {
+      lastError = err.message || String(err);
+      console.warn(`🖼️ Vision attempt ${attempt.label} threw:`, lastError);
+    }
+  }
+
+  throw new Error(`Groq vision error: ${lastError}`);
+}
+
+function parseVisionJson(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+
+  let text = raw.trim();
+  // Strip reasoning / markdown wrappers from Qwen-style outputs
+  text = text.replace(/```json\s*/gi, '').replace(/```/g, '');
+  text = text.replace(/<think>[\s\S]*?(<\/think>|$)/gi, '');
+  text = text.replace(/<thinking>[\s\S]*?(<\/thinking>|$)/gi, '');
+  text = text.replace(/<\/?think>/gi, '');
+
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  const candidate = text.slice(start, end + 1);
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    try {
+      return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1'));
+    } catch {
+      return null;
+    }
+  }
 }
 
 function clampConfidence(value) {
