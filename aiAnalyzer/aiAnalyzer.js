@@ -619,3 +619,203 @@ Rules:
     throw error;
   }
 }
+
+const VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.6-27b';
+const EXTRACT_CONFIDENCE_FLOOR = 0.6;
+
+/**
+ * Analyze listing photos and draft ad fields (title, category, subcategory, description).
+ * Never invents price or location — those stay manual on the client.
+ *
+ * @param {{ images: Array<{ mimeType: string, base64: string }>, categories: Array<{ name: string, subCategories?: string[] }> }} params
+ */
+export async function extractAdFromImages({ images, categories }) {
+  const GROQ_API_KEY = process.env.GROQ_API_KEY;
+  if (!GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY not configured');
+  }
+  if (!Array.isArray(images) || images.length === 0) {
+    throw new Error('At least one image is required');
+  }
+
+  const categoryCatalog = (categories || []).map((c) => {
+    const subs = (c.subCategories || c.subCategory || [])
+      .map((s) => (typeof s === 'string' ? s : s?.name))
+      .filter(Boolean);
+    return { name: c.name, subCategories: subs };
+  });
+
+  const catalogText = categoryCatalog.length
+    ? JSON.stringify(categoryCatalog)
+    : '[]';
+
+  const systemPrompt = `You are a marketplace listing assistant for Dealr (India classifieds).
+Analyze product photos and return ONLY a JSON object that drafts an ad form.
+
+Rules:
+- Use ONLY what is visible or clearly readable in the images (labels, logos, model text).
+- Never invent brand, model, storage, year, or condition you cannot see.
+- Never include price or location — those are always left null.
+- category MUST be an exact name from the provided catalog when possible; otherwise null.
+- subCategory MUST be an exact subcategory under that category when possible; otherwise null or "".
+- title: short, specific listing title (max ~80 chars), no emoji, no price.
+- description: natural seller voice, 150–280 characters, only visible facts. No hype, no "perfect condition" unless clearly visible.
+- confidence values are 0–1 floats for title, category, subCategory, description.
+- If unsure about a field, set the value to null/"" and confidence below 0.6.
+- Return JSON only.`;
+
+  const userText = `Allowed categories (JSON):
+${catalogText}
+
+Return this exact JSON shape:
+{
+  "title": "string or null",
+  "category": "exact catalog name or null",
+  "subCategory": "exact subcategory or null",
+  "description": "string or null",
+  "visibleAttributes": { "Brand": "...", "Condition": "..." },
+  "confidence": {
+    "title": 0.0,
+    "category": 0.0,
+    "subCategory": 0.0,
+    "description": 0.0
+  },
+  "notes": "brief uncertainty note or empty string"
+}`;
+
+  const content = [
+    { type: 'text', text: userText },
+    ...images.slice(0, 5).map((img) => ({
+      type: 'image_url',
+      image_url: {
+        url: `data:${img.mimeType || 'image/jpeg'};base64,${img.base64}`,
+      },
+    })),
+  ];
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: VISION_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content },
+      ],
+      temperature: 0.2,
+      max_tokens: 900,
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(`Groq vision error: ${errorData.error?.message || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content || '';
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error('No valid JSON in vision response');
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    throw new Error('Failed to parse vision JSON');
+  }
+
+  const confidence = {
+    title: clampConfidence(parsed?.confidence?.title),
+    category: clampConfidence(parsed?.confidence?.category),
+    subCategory: clampConfidence(parsed?.confidence?.subCategory),
+    description: clampConfidence(parsed?.confidence?.description),
+  };
+
+  const matchedCategory = matchCategoryName(parsed?.category, categoryCatalog);
+  const matchedSub = matchSubCategory(
+    parsed?.subCategory,
+    matchedCategory,
+    categoryCatalog,
+  );
+
+  const title = cleanText(parsed?.title, 90);
+  const description = cleanText(parsed?.description, 600);
+
+  const draft = {
+    title: confidence.title >= EXTRACT_CONFIDENCE_FLOOR ? title : null,
+    category: confidence.category >= EXTRACT_CONFIDENCE_FLOOR ? matchedCategory : null,
+    subCategory:
+      confidence.subCategory >= EXTRACT_CONFIDENCE_FLOOR ? matchedSub : null,
+    description:
+      confidence.description >= EXTRACT_CONFIDENCE_FLOOR ? description : null,
+    visibleAttributes: sanitizeAttributes(parsed?.visibleAttributes),
+    confidence,
+    notes: cleanText(parsed?.notes, 200) || '',
+    confidenceFloor: EXTRACT_CONFIDENCE_FLOOR,
+  };
+
+  // If category failed matching, drop it even if model was confident
+  if (parsed?.category && !matchedCategory) {
+    draft.category = null;
+    confidence.category = Math.min(confidence.category, 0.4);
+  }
+
+  return draft;
+}
+
+function clampConfidence(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function cleanText(value, maxLen) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text || /^null$/i.test(text)) return null;
+  return text.slice(0, maxLen);
+}
+
+function sanitizeAttributes(attrs) {
+  if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    const k = String(key || '').trim().slice(0, 40);
+    const v = cleanText(value, 80);
+    if (k && v) out[k] = v;
+  }
+  return out;
+}
+
+function matchCategoryName(raw, catalog) {
+  const name = cleanText(raw, 80);
+  if (!name || !catalog.length) return null;
+  const lower = name.toLowerCase();
+  const exact = catalog.find((c) => c.name.toLowerCase() === lower);
+  if (exact) return exact.name;
+  const partial = catalog.find(
+    (c) =>
+      c.name.toLowerCase().includes(lower) || lower.includes(c.name.toLowerCase()),
+  );
+  return partial?.name || null;
+}
+
+function matchSubCategory(raw, categoryName, catalog) {
+  const name = cleanText(raw, 80);
+  if (!name || !categoryName) return null;
+  const cat = catalog.find((c) => c.name === categoryName);
+  if (!cat?.subCategories?.length) return null;
+  const lower = name.toLowerCase();
+  const exact = cat.subCategories.find((s) => s.toLowerCase() === lower);
+  if (exact) return exact;
+  const partial = cat.subCategories.find(
+    (s) => s.toLowerCase().includes(lower) || lower.includes(s.toLowerCase()),
+  );
+  return partial || null;
+}

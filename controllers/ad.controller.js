@@ -3,7 +3,7 @@ import Ad from "../models/ad.model.js";
 import User from "../models/user.model.js";
 import AdCategory from "../models/ad.category.model.js";
 import ReportReason from "../models/reportReason.model.js";
-import {analyzeDescription,aiSearchAds,analyzeChatForFraud,generateDescription} from "../aiAnalyzer/aiAnalyzer.js";
+import {analyzeDescription,aiSearchAds,analyzeChatForFraud,generateDescription,extractAdFromImages} from "../aiAnalyzer/aiAnalyzer.js";
 import { sendChatNotification, sendReviewPromptNotification } from "../services/pushService.js";
 import { PUBLIC_TRUST_SELECT, recalculateUserTrust, formatTrustProfile } from "../services/trustScore.service.js";
 import { ensureLocationExists } from "../services/location.service.js";
@@ -985,6 +985,97 @@ export const generateDescriptionUsingAI = async (req, res) => {
     });
   }
 };
+
+export const extractAdFromImagesUsingAI = async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least one image is required',
+      });
+    }
+
+    let categories = [];
+    if (typeof req.body?.categories === 'string' && req.body.categories.trim()) {
+      try {
+        categories = JSON.parse(req.body.categories);
+      } catch {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid categories payload',
+        });
+      }
+    } else if (Array.isArray(req.body?.categories)) {
+      categories = req.body.categories;
+    }
+
+    if (!categories.length) {
+      const dbCats = await AdCategory.find({}).select('name subCategory').lean();
+      categories = dbCats.map((c) => ({
+        name: c.name,
+        subCategories: c.subCategory || [],
+      }));
+    }
+
+    const images = files.map((file) => ({
+      mimeType: file.mimetype || 'image/jpeg',
+      base64: file.buffer.toString('base64'),
+    }));
+
+    console.log(`🖼️ Extracting ad draft from ${images.length} image(s)...`);
+    const draft = await extractAdFromImages({ images, categories });
+
+    // Polish description with existing text model when we have enough context
+    if (draft.title && draft.category && draft.description) {
+      try {
+        const polished = await generateDescription({
+          title: draft.title,
+          category: draft.category,
+          subCategory: draft.subCategory || 'General',
+          description: draft.description,
+          location: '',
+          price: '',
+        });
+        const originalLen = draft.description.length;
+        if (
+          polished
+          && polished.length >= Math.min(150, originalLen)
+          && polished.length >= Math.floor(originalLen * 0.75)
+        ) {
+          draft.description = polished;
+          draft.descriptionPolished = true;
+        } else {
+          draft.descriptionPolished = false;
+        }
+      } catch (polishErr) {
+        console.warn('Description polish skipped:', polishErr.message);
+        draft.descriptionPolished = false;
+      }
+    }
+
+    const filledFields = ['title', 'category', 'subCategory', 'description'].filter(
+      (key) => draft[key],
+    );
+
+    console.log(`✅ Vision draft ready (${filledFields.join(', ') || 'no high-confidence fields'})`);
+
+    return res.json({
+      success: true,
+      data: {
+        ...draft,
+        filledFields,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Vision extract error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to analyze images',
+      message: error.message,
+    });
+  }
+};
 export const markMessagesAsSeen = async (req, res) => {
   try {
     const currentUserId = req.user?.id;
@@ -1063,7 +1154,7 @@ export const incrementViews = async (req, res) => {
     ad.views = (ad.views || 0) + 1;
     await ad.save();
 
-    if (userId) {
+    if (userId && String(ad.seller) !== String(userId)) {
       const user = await User.findById(userId);
       if (user) {
         user.lastViewedAds = user.lastViewedAds || [];

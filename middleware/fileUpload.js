@@ -48,4 +48,14 @@ const upload = multer({
     }
 });
 
+/** In-memory upload for AI image analysis (not persisted to Cloudinary). */
+export const memoryUpload = multer({
+    storage: multer.memoryStorage(),
+    fileFilter,
+    limits: {
+        files: 5,
+        fileSize: 8 * 1024 * 1024,
+    },
+});
+
 export default upload;
