@@ -23,25 +23,55 @@ function withEnv(overrides, fn) {
   }
 }
 
-withEnv({ AI_PROVIDER: '', NVIDIA_API_KEY: 'nvapi-test', GROQ_API_KEY: 'gsk-test' }, () => {
-  assert.equal(resolveProviderName(), 'nvidia');
+withEnv({
+  AI_PROVIDER: '',
+  GEMINI_API_KEY: 'gemini-test',
+  GOOGLE_API_KEY: '',
+  NVIDIA_API_KEY: 'nvapi-should-be-ignored',
+  GROQ_API_KEY: 'gsk-test',
+}, () => {
+  assert.equal(resolveProviderName(), 'gemini');
   const config = getLlmConfig();
-  assert.equal(config.provider, 'nvidia');
-  assert.equal(config.baseUrl, 'https://integrate.api.nvidia.com/v1');
-  assert.equal(config.textModel, 'nvidia/llama-3.3-nemotron-super-49b-v1.5');
-  assert.equal(config.visionModel, 'nvidia/nemotron-nano-12b-v2-vl');
+  assert.equal(config.provider, 'gemini');
+  assert.equal(config.baseUrl, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(config.textModel, 'gemini-2.5-flash');
+  assert.equal(config.visionModel, 'gemini-2.5-flash');
 });
 
-withEnv({ AI_PROVIDER: 'groq', NVIDIA_API_KEY: 'nvapi-test', GROQ_API_KEY: 'gsk-test' }, () => {
+withEnv({
+  AI_PROVIDER: 'groq',
+  GEMINI_API_KEY: 'gemini-test',
+  GROQ_API_KEY: 'gsk-test',
+}, () => {
   assert.equal(resolveProviderName(), 'groq');
   assert.equal(getLlmConfig().textModel, 'llama-3.3-70b-versatile');
 });
 
-withEnv({ AI_PROVIDER: '', NVIDIA_API_KEY: '', GROQ_API_KEY: 'gsk-test' }, () => {
+withEnv({
+  AI_PROVIDER: '',
+  GEMINI_API_KEY: '',
+  GOOGLE_API_KEY: '',
+  GROQ_API_KEY: 'gsk-test',
+}, () => {
   assert.equal(resolveProviderName(), 'groq');
 });
 
-withEnv({ AI_PROVIDER: '', NVIDIA_API_KEY: '', GROQ_API_KEY: '' }, () => {
+withEnv({
+  AI_PROVIDER: '',
+  GEMINI_API_KEY: '',
+  GOOGLE_API_KEY: 'google-alias-key',
+  GROQ_API_KEY: '',
+}, () => {
+  assert.equal(resolveProviderName(), 'gemini');
+  assert.equal(getLlmConfig().apiKey, 'google-alias-key');
+});
+
+withEnv({
+  AI_PROVIDER: '',
+  GEMINI_API_KEY: '',
+  GOOGLE_API_KEY: '',
+  GROQ_API_KEY: '',
+}, () => {
   assert.throws(() => resolveProviderName(), /No AI provider configured/);
 });
 

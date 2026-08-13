@@ -1,23 +1,23 @@
 /**
- * OpenAI-compatible chat client for NVIDIA Nemotron (NIM) and Groq.
+ * OpenAI-compatible chat client for Gemini (primary) and Groq (fallback).
  *
  * Env:
- *   AI_PROVIDER          nvidia | groq   (default: nvidia if NVIDIA_API_KEY is set, else groq)
- *   NVIDIA_API_KEY       nvapi-... from https://build.nvidia.com/settings/api-keys
- *   NVIDIA_API_BASE      default https://integrate.api.nvidia.com/v1
- *   NVIDIA_TEXT_MODEL    default nvidia/llama-3.3-nemotron-super-49b-v1.5
- *   NVIDIA_VISION_MODEL  default nvidia/nemotron-nano-12b-v2-vl
- *   GROQ_API_KEY         kept as optional fallback
+ *   AI_PROVIDER          gemini | groq   (default: gemini if GEMINI_API_KEY is set, else groq)
+ *   GEMINI_API_KEY       from https://aistudio.google.com/apikey
+ *   GEMINI_API_BASE      default https://generativelanguage.googleapis.com/v1beta/openai
+ *   GEMINI_TEXT_MODEL    default gemini-2.5-flash
+ *   GEMINI_VISION_MODEL  default gemini-2.5-flash (Flash is multimodal)
+ *   GROQ_API_KEY         optional fallback
  *   GROQ_TEXT_MODEL      default llama-3.3-70b-versatile
  *   GROQ_VISION_MODEL    default qwen/qwen3.6-27b
  */
 
-const NVIDIA_DEFAULTS = {
-  provider: 'nvidia',
-  baseUrl: 'https://integrate.api.nvidia.com/v1',
-  keyEnv: 'NVIDIA_API_KEY',
-  textModel: 'nvidia/llama-3.3-nemotron-super-49b-v1.5',
-  visionModel: 'nvidia/nemotron-nano-12b-v2-vl',
+const GEMINI_DEFAULTS = {
+  provider: 'gemini',
+  baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  keyEnv: 'GEMINI_API_KEY',
+  textModel: 'gemini-2.5-flash',
+  visionModel: 'gemini-2.5-flash',
 };
 
 const GROQ_DEFAULTS = {
@@ -28,32 +28,37 @@ const GROQ_DEFAULTS = {
   visionModel: 'qwen/qwen3.6-27b',
 };
 
+function geminiApiKey() {
+  return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+}
+
 export function resolveProviderName() {
   const explicit = String(process.env.AI_PROVIDER || '').trim().toLowerCase();
-  if (explicit === 'nvidia' || explicit === 'groq') return explicit;
-  if (process.env.NVIDIA_API_KEY) return 'nvidia';
+  if (explicit === 'gemini' || explicit === 'google') return 'gemini';
+  if (explicit === 'groq') return 'groq';
+  if (geminiApiKey()) return 'gemini';
   if (process.env.GROQ_API_KEY) return 'groq';
   throw new Error(
-    'No AI provider configured. Set NVIDIA_API_KEY (recommended) or GROQ_API_KEY.',
+    'No AI provider configured. Set GEMINI_API_KEY (recommended) or GROQ_API_KEY.',
   );
 }
 
 export function getLlmConfig() {
   const provider = resolveProviderName();
-  const defaults = provider === 'nvidia' ? NVIDIA_DEFAULTS : GROQ_DEFAULTS;
+  const defaults = provider === 'gemini' ? GEMINI_DEFAULTS : GROQ_DEFAULTS;
+  const apiKey = provider === 'gemini' ? geminiApiKey() : process.env[defaults.keyEnv];
 
-  const apiKey = process.env[defaults.keyEnv];
   if (!apiKey) {
     throw new Error(`${defaults.keyEnv} not configured`);
   }
 
-  if (provider === 'nvidia') {
+  if (provider === 'gemini') {
     return {
       ...defaults,
       apiKey,
-      baseUrl: (process.env.NVIDIA_API_BASE || defaults.baseUrl).replace(/\/$/, ''),
-      textModel: process.env.NVIDIA_TEXT_MODEL || defaults.textModel,
-      visionModel: process.env.NVIDIA_VISION_MODEL || defaults.visionModel,
+      baseUrl: (process.env.GEMINI_API_BASE || defaults.baseUrl).replace(/\/$/, ''),
+      textModel: process.env.GEMINI_TEXT_MODEL || defaults.textModel,
+      visionModel: process.env.GEMINI_VISION_MODEL || defaults.visionModel,
     };
   }
 
@@ -66,20 +71,10 @@ export function getLlmConfig() {
   };
 }
 
-function applyNoThink(messages) {
-  return messages.map((message, index) => {
-    if (index !== 0 || message.role !== 'system') return message;
-    const content = message.content;
-    if (typeof content !== 'string') return message;
-    if (content.includes('/no_think')) return message;
-    return { ...message, content: `/no_think\n${content}` };
-  });
-}
-
 function buildRequestBody({ config, messages, temperature, maxTokens, responseFormat, vision }) {
   const body = {
     model: vision ? config.visionModel : config.textModel,
-    messages: config.provider === 'nvidia' ? applyNoThink(messages) : messages,
+    messages,
     temperature,
     max_tokens: maxTokens,
   };
@@ -88,9 +83,9 @@ function buildRequestBody({ config, messages, temperature, maxTokens, responseFo
     body.response_format = responseFormat;
   }
 
-  // Nemotron reasoning models default to thinking ON, which breaks JSON parsers.
-  if (config.provider === 'nvidia') {
-    body.chat_template_kwargs = { enable_thinking: false };
+  // Keep JSON extractors clean — Gemini 2.5+ thinks unless told not to.
+  if (config.provider === 'gemini') {
+    body.reasoning_effort = 'none';
   }
 
   if (config.provider === 'groq' && vision) {
