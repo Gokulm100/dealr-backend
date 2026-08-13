@@ -72,10 +72,7 @@ export async function provideAiAnalytics(req, res) {
     console.log('🤖 Analyzing ad and related data...',constructedMainAdData);
     console.log('🤖 Analyzing ad and related data...',constructedRelatedAdsData);
 
-    const aiAnalysis = await analyzeAd({
-      constructedMainAdData,
-      constructedRelatedAdsData
-    });
+    const aiAnalysis = await analyzeAd(constructedMainAdData, constructedRelatedAdsData);
 
     console.log('✅ AI summary generated successfully');
 
@@ -87,7 +84,11 @@ export async function provideAiAnalytics(req, res) {
 
   } catch (error) {
     console.error('Error fetching AI analytics:', error);
-    throw error;
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to generate AI analytics',
+      message: error.message,
+    });
   }
 }
 export async function provideAiPriceInsights(req, res) {
@@ -112,10 +113,7 @@ export async function provideAiPriceInsights(req, res) {
     // console.log('🤖 Analyzing ad and related data...',constructedMainAdData);
     // console.log('🤖 Analyzing ad and related data...',constructedRelatedAdsData);
 
-    const aiAnalysis = await analyzeAiPriceInsights({
-      constructedMainAdData,
-      constructedRelatedAdsData
-    });
+    const aiAnalysis = await analyzeAiPriceInsights(constructedMainAdData, constructedRelatedAdsData);
 
     console.log('✅ AI summary generated successfully');
 
@@ -127,7 +125,11 @@ export async function provideAiPriceInsights(req, res) {
 
   } catch (error) {
     console.error('Error fetching AI price insights:', error);
-    throw error;
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to generate AI price insights',
+      message: error.message,
+    });
   }
 }
 

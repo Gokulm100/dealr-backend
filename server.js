@@ -1,9 +1,9 @@
+import 'dotenv/config';
 console.log("Server file loaded");
 
 console.log("Server file loaded");
 import express from "express";
 import http from "http";
-import dotenv from "dotenv";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import { initSocket } from "./socket.js";
@@ -15,7 +15,6 @@ import adminRoutes from "./routes/admin.routes.js";
 import reviewRoutes from "./routes/review.routes.js";
 
 
-dotenv.config();
 connectDB();
 
 const app = express();

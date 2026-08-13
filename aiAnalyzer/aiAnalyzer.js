@@ -2,6 +2,7 @@ import {
   chatCompletion,
   chatCompletionWithFallback,
   extractJsonObject,
+  unwrapAdAnalysisArgs,
 } from './llmClient.js';
 
 const EXTRACT_CONFIDENCE_FLOOR = 0.6;
@@ -18,7 +19,7 @@ async function completeJson({
       messages,
       temperature,
       maxTokens,
-      responseFormat,
+      responseFormat: responseFormat || { type: 'json_object' },
     });
     const parsed = extractJsonObject(content);
     if (!parsed) {
@@ -110,6 +111,7 @@ Now analyze the description above and return ONLY the JSON:`;
 }
 
 export async function analyzeAd(mainAdData, relatedAdsData) {
+  ({ mainAdData, relatedAdsData } = unwrapAdAnalysisArgs(mainAdData, relatedAdsData));
   const systemPrompt = `You are a classified ads performance analyst. Analyze a seller's ad against related listings and return ONLY a strictly valid JSON object — no markdown, no explanation, no extra text.
 
 ANALYSIS ITEMS (include only those supported by the data):
@@ -159,7 +161,7 @@ Return ONLY this JSON structure:
   const parsed = await completeJson({
     errorLabel: 'AI ad analysis error',
     temperature: 0.1,
-    maxTokens: 800,
+    maxTokens: 2048,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
@@ -331,7 +333,7 @@ Return ONLY this JSON structure:
     parsed = await completeJson({
       errorLabel: 'AI fraud analysis error',
       temperature: 0.1,
-      maxTokens: 400,
+      maxTokens: 1024,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -353,6 +355,7 @@ Return ONLY this JSON structure:
 }
 
 export async function analyzeAiPriceInsights(mainAdData, relatedAdsData) {
+  ({ mainAdData, relatedAdsData } = unwrapAdAnalysisArgs(mainAdData, relatedAdsData));
   const systemPrompt = `You are a classified ads analyst. Your ONLY job is to extract buyer offers from chat data and return a strict JSON object.
 
 OFFER EXTRACTION RULES (non-negotiable):
@@ -401,7 +404,7 @@ Steps:
   const parsed = await completeJson({
     errorLabel: 'AI price insights error',
     temperature: 0.1,
-    maxTokens: 600,
+    maxTokens: 1024,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
