@@ -48,9 +48,34 @@ export function resolveProviderName() {
   );
 }
 
-export function getLlmConfig() {
-  const provider = resolveProviderName();
+export function isQuotaError(error) {
+  const status = error?.status;
+  const message = String(error?.message || error || '');
+  return (
+    status === 429
+    || /RESOURCE_EXHAUSTED/i.test(message)
+    || /exceeded your current quota/i.test(message)
+    || /quota exceeded/i.test(message)
+    || /rate.?limit/i.test(message)
+    || /Too Many Requests/i.test(message)
+  );
+}
 
+let geminiCooldownUntil = 0;
+
+export function markGeminiQuotaCooldown(ms = 10 * 60 * 1000) {
+  geminiCooldownUntil = Date.now() + ms;
+}
+
+export function isGeminiOnCooldown() {
+  return Date.now() < geminiCooldownUntil;
+}
+
+export function resetGeminiQuotaCooldown() {
+  geminiCooldownUntil = 0;
+}
+
+export function getLlmConfig(provider = resolveProviderName()) {
   if (provider === 'gemini') {
     const apiKey = geminiApiKey();
     if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
@@ -216,6 +241,14 @@ async function chatCompletionGemini({ messages, temperature, maxTokens, response
       );
 
       if (response.status === 404 || (notFound && disableThinking === false)) break;
+      if (response.status === 429 || isQuotaError({ status: response.status, message: lastError })) {
+        throw Object.assign(new Error(`AI API error (gemini): ${lastError}`), {
+          status: response.status,
+          provider: 'gemini',
+          responseBody: data,
+        });
+      }
+
       if (!thinkingRejected && response.status !== 400) {
         throw Object.assign(new Error(`AI API error (gemini): ${lastError}`), {
           status: response.status,
@@ -232,7 +265,7 @@ async function chatCompletionGemini({ messages, temperature, maxTokens, response
 }
 
 async function chatCompletionGroq({ messages, temperature, maxTokens, responseFormat, vision }) {
-  const config = getLlmConfig();
+  const config = getLlmConfig('groq');
   const body = {
     model: vision ? config.visionModel : config.textModel,
     messages,
@@ -278,22 +311,27 @@ export async function chatCompletion({
   vision = false,
 }) {
   const config = getLlmConfig();
+  const args = { messages, temperature, maxTokens, responseFormat, vision };
+
   if (config.provider === 'gemini') {
-    return chatCompletionGemini({
-      messages,
-      temperature,
-      maxTokens,
-      responseFormat,
-      vision,
-    });
+    if (isGeminiOnCooldown() && readEnv('GROQ_API_KEY')) {
+      console.warn('🤖 Gemini quota cooldown active — using Groq');
+      return chatCompletionGroq(args);
+    }
+
+    try {
+      return await chatCompletionGemini(args);
+    } catch (error) {
+      if (isQuotaError(error) && readEnv('GROQ_API_KEY')) {
+        markGeminiQuotaCooldown();
+        console.warn('🤖 Gemini quota exceeded — falling back to Groq:', error.message);
+        return chatCompletionGroq(args);
+      }
+      throw error;
+    }
   }
-  return chatCompletionGroq({
-    messages,
-    temperature,
-    maxTokens,
-    responseFormat,
-    vision,
-  });
+
+  return chatCompletionGroq(args);
 }
 
 export async function chatCompletionWithFallback({
