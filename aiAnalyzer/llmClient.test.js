@@ -3,6 +3,10 @@ import {
   extractGeminiText,
   extractJsonObject,
   getLlmConfig,
+  isQuotaError,
+  markGeminiQuotaCooldown,
+  isGeminiOnCooldown,
+  resetGeminiQuotaCooldown,
   resolveProviderName,
   stripReasoning,
   toGeminiParts,
@@ -49,6 +53,29 @@ withEnv({
   assert.equal(resolveProviderName(), 'groq');
   assert.equal(getLlmConfig().textModel, 'llama-3.3-70b-versatile');
 });
+
+withEnv({
+  AI_PROVIDER: '',
+  GEMINI_API_KEY: 'gemini-test',
+  GROQ_API_KEY: 'gsk-test',
+}, () => {
+  const groq = getLlmConfig('groq');
+  assert.equal(groq.provider, 'groq');
+  assert.equal(groq.apiKey, 'gsk-test');
+  assert.equal(groq.baseUrl, 'https://api.groq.com/openai/v1');
+});
+
+assert.equal(isQuotaError({ status: 429, message: 'Too Many Requests' }), true);
+assert.equal(isQuotaError({ message: 'You exceeded your current quota' }), true);
+assert.equal(isQuotaError({ message: 'RESOURCE_EXHAUSTED' }), true);
+assert.equal(isQuotaError({ status: 400, message: 'bad request' }), false);
+
+resetGeminiQuotaCooldown();
+assert.equal(isGeminiOnCooldown(), false);
+markGeminiQuotaCooldown(60_000);
+assert.equal(isGeminiOnCooldown(), true);
+resetGeminiQuotaCooldown();
+assert.equal(isGeminiOnCooldown(), false);
 
 withEnv({
   AI_PROVIDER: '',
