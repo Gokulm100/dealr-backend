@@ -1,77 +1,74 @@
-// Groq AI Analysis Function
-export async function analyzeDescription({ adTitle, category, subCategory, description }) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-  
-  if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not configured');
-  }
+import {
+  chatCompletion,
+  chatCompletionWithFallback,
+  extractJsonObject,
+} from './llmClient.js';
 
-  const prompt = buildDynamicPrompt(adTitle, category, subCategory, description);
+const EXTRACT_CONFIDENCE_FLOOR = 0.6;
 
+async function completeJson({
+  messages,
+  temperature,
+  maxTokens,
+  responseFormat,
+  errorLabel,
+}) {
   try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          {
-            role: "system",
-            content: `You are an expert at extracting and organizing information from classified ads. 
-You analyze the content and return ONLY relevant key-value pairs as JSON. 
-Never include fields with "Not specified" or empty values.
-Always respond with valid JSON only, no explanation or additional text.`
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        temperature: 0.2,
-        max_tokens: 1000
-      })
+    const { content } = await chatCompletion({
+      messages,
+      temperature,
+      maxTokens,
+      responseFormat,
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Groq API error: ${errorData.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-    const aiResponse = data.choices[0].message.content;
-
-    // Extract JSON from response
-    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const parsed = extractJsonObject(content);
+    if (!parsed) {
       throw new Error('No valid JSON in AI response');
     }
-
-    const parsedData = JSON.parse(jsonMatch[0]);
-
-    // Remove any "Not specified" or empty values
-    const cleanedData = {};
-    for (const [key, value] of Object.entries(parsedData)) {
-      if (value && 
-          value !== "Not specified" && 
-          value !== "N/A" && 
-          value !== "Not mentioned" &&
-          String(value).trim() !== "") {
-        cleanedData[key] = value;
-      }
-    }
-
-    return cleanedData;
-
+    return parsed;
   } catch (error) {
-    console.error('Groq API Error:', error);
+    console.error(`${errorLabel}:`, error);
     throw error;
   }
 }
 
-// Build dynamic prompt based on category
+export async function analyzeDescription({ adTitle, category, subCategory, description }) {
+  const prompt = buildDynamicPrompt(adTitle, category, subCategory, description);
+
+  const parsedData = await completeJson({
+    errorLabel: 'AI description analysis error',
+    temperature: 0.2,
+    maxTokens: 1000,
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert at extracting and organizing information from classified ads. 
+You analyze the content and return ONLY relevant key-value pairs as JSON. 
+Never include fields with "Not specified" or empty values.
+Always respond with valid JSON only, no explanation or additional text.`,
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+  });
+
+  const cleanedData = {};
+  for (const [key, value] of Object.entries(parsedData)) {
+    if (
+      value &&
+      value !== 'Not specified' &&
+      value !== 'N/A' &&
+      value !== 'Not mentioned' &&
+      String(value).trim() !== ''
+    ) {
+      cleanedData[key] = value;
+    }
+  }
+
+  return cleanedData;
+}
+
 function buildDynamicPrompt(adTitle, category, subCategory, description) {
   return `Analyze this classified ad and extract ALL relevant information as key-value pairs.
 
@@ -113,9 +110,6 @@ Now analyze the description above and return ONLY the JSON:`;
 }
 
 export async function analyzeAd(mainAdData, relatedAdsData) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not configured');
-
   const systemPrompt = `You are a classified ads performance analyst. Analyze a seller's ad against related listings and return ONLY a strictly valid JSON object — no markdown, no explanation, no extra text.
 
 ANALYSIS ITEMS (include only those supported by the data):
@@ -162,55 +156,23 @@ Return ONLY this JSON structure:
   ]
 }`;
 
-  try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.1,
-        max_tokens: 800
-      })
-    });
+  const parsed = await completeJson({
+    errorLabel: 'AI ad analysis error',
+    temperature: 0.1,
+    maxTokens: 800,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+  });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Groq API error: ${errorData.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-    const aiResponse = data.choices[0].message.content;
-
-    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No valid JSON in AI response');
-
-    const parsed = JSON.parse(jsonMatch[0]);
-
-    // Post-processing: ensure shape is always consistent
-    return {
-      analysis: Array.isArray(parsed.analysis) ? parsed.analysis : [],
-      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : []
-    };
-
-  } catch (error) {
-    console.error('Groq API Error:', error);
-    throw error;
-  }
+  return {
+    analysis: Array.isArray(parsed.analysis) ? parsed.analysis : [],
+    recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
+  };
 }
+
 export async function aiSearchAds(ads, searchCriteria) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-
-  if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not configured');
-  }
-
   const criteriaString = typeof searchCriteria === 'string'
     ? searchCriteria
     : JSON.stringify(searchCriteria, null, 2);
@@ -292,19 +254,15 @@ If no ads match, return:
 
 CRITICAL: Return ONLY valid JSON. Do not include any explanation, markdown formatting, or additional text.`;
 
-  try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          {
-            role: "system",
-            content: `You are a precise search algorithm for classified ads. 
+  const validJSON = await completeJson({
+    errorLabel: 'AI search error',
+    temperature: 0.1,
+    maxTokens: 8000,
+    responseFormat: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: `You are a precise search algorithm for classified ads. 
 
 RULES:
 1. Apply filters STRICTLY and LITERALLY
@@ -315,69 +273,24 @@ RULES:
    - "below 50000" → include only ads where price < 50000
    - Be precise with numbers
 5. Always output valid JSON only - no markdown, no explanation
-6. Double-check your price filtering before responding`
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        temperature: 0.1, // Very low for precise filtering
-        max_tokens: 8000, // Higher to handle more results
-        response_format: { type: "json_object" } // Forces JSON output (if supported by Groq)
-      })
-    });
+6. Double-check your price filtering before responding`,
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+  });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Groq API error: ${errorData.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-    console.log('Raw AI Response:', data.choices[0].message.content);
-    
-    const aiResponse = data.choices[0].message.content.trim();
-
-    // Try direct parsing first
-    try {
-      const validJSON = JSON.parse(aiResponse);
-      
-      // Validate structure
-      if (!validJSON.ads || !Array.isArray(validJSON.ads)) {
-        throw new Error('Invalid response structure - missing ads array');
-      }
-      
-      console.log(`AI returned ${validJSON.total} matching ads`);
-      return validJSON;
-      
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', parseError);
-      console.error('Response was:', aiResponse);
-      
-      // Try to extract JSON with regex as fallback
-      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No valid JSON found in AI response');
-      }
-      
-      const validJSON = JSON.parse(jsonMatch[0]);
-      
-      if (!validJSON.ads || !Array.isArray(validJSON.ads)) {
-        throw new Error('Invalid response structure after regex extraction');
-      }
-      
-      return validJSON;
-    }
-
-  } catch (error) {
-    console.error('Groq API Error:', error);
-    throw error;
+  if (!validJSON.ads || !Array.isArray(validJSON.ads)) {
+    throw new Error('Invalid response structure - missing ads array');
   }
-}
-export async function analyzeChatForFraud(chats) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not configured');
 
+  console.log(`AI returned ${validJSON.total} matching ads`);
+  return validJSON;
+}
+
+export async function analyzeChatForFraud(chats) {
   const systemPrompt = `You are a fraud detection analyst for a classified ads platform. Analyze chat conversations and return ONLY a strictly valid JSON object — no markdown, no explanation, no extra text.
 
 FRAUD INDICATORS TO DETECT:
@@ -413,59 +326,33 @@ Return ONLY this JSON structure:
   "recommendations": "<one concise actionable sentence — omit this field entirely if type is SAFE>"
 }`;
 
+  let parsed = {};
   try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.1,
-        max_tokens: 400
-      })
+    parsed = await completeJson({
+      errorLabel: 'AI fraud analysis error',
+      temperature: 0.1,
+      maxTokens: 400,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Groq API error: ${errorData.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-    const aiResponse = data.choices[0].message.content;
-
-    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No valid JSON in AI response');
-
-    let parsed = {};
-    try {
-      parsed = JSON.parse(jsonMatch[0]);
-    } catch (parseError) {
-      console.error('Failed to parse AI response JSON:', parseError);
+  } catch (error) {
+    if (error.message?.includes('No valid JSON')) {
+      console.error('Failed to parse AI response JSON:', error);
       return {};
     }
-
-    // Post-processing: ensure shape is always consistent
-    return {
-      type: parsed.type ?? "SAFE",
-      fraudIndicators: Array.isArray(parsed.fraudIndicators) ? parsed.fraudIndicators : [],
-      ...(parsed.recommendations ? { recommendations: parsed.recommendations } : {})
-    };
-
-  } catch (error) {
-    console.error('Groq API Error:', error);
     throw error;
   }
-}
-export async function analyzeAiPriceInsights(mainAdData, relatedAdsData) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not configured');
 
+  return {
+    type: parsed.type ?? 'SAFE',
+    fraudIndicators: Array.isArray(parsed.fraudIndicators) ? parsed.fraudIndicators : [],
+    ...(parsed.recommendations ? { recommendations: parsed.recommendations } : {}),
+  };
+}
+
+export async function analyzeAiPriceInsights(mainAdData, relatedAdsData) {
   const systemPrompt = `You are a classified ads analyst. Your ONLY job is to extract buyer offers from chat data and return a strict JSON object.
 
 OFFER EXTRACTION RULES (non-negotiable):
@@ -511,62 +398,30 @@ Steps:
 4. Check for red flags in buyer behavior — flag in description if found.
 5. Return ONLY the JSON. No explanation, no markdown.`;
 
-  try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.1, // lower = more deterministic
-        max_tokens: 600
-      })
-    });
+  const parsed = await completeJson({
+    errorLabel: 'AI price insights error',
+    temperature: 0.1,
+    maxTokens: 600,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+  });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Groq API error: ${errorData.error?.message || response.statusText}`);
+  const summary = parsed?.summary ?? [];
+  const highest = summary.find((s) => s.title === 'Highest Offer');
+  const best = summary.find((s) => s.title === 'Best Offer');
+
+  if (highest && best && highest.value !== 'null' && best.value !== 'null') {
+    if (Number(best.value) > Number(highest.value)) {
+      [highest.value, best.value] = [best.value, highest.value];
     }
-
-    const data = await response.json();
-    const aiResponse = data.choices[0].message.content;
-
-    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No valid JSON in AI response');
-
-    const parsed = JSON.parse(jsonMatch[0]);
-
-    // Post-processing safety check: enforce Highest >= Best
-    const summary = parsed?.summary ?? [];
-    const highest = summary.find(s => s.title === "Highest Offer");
-    const best = summary.find(s => s.title === "Best Offer");
-
-    if (highest && best && highest.value !== "null" && best.value !== "null") {
-      if (Number(best.value) > Number(highest.value)) {
-        // Swap the values if model got it backwards
-        [highest.value, best.value] = [best.value, highest.value];
-      }
-    }
-
-    return parsed;
-  } catch (error) {
-    console.error('Groq API Error:', error);
-    throw error;
   }
+
+  return parsed;
 }
-export async function generateDescription({ title, category, subCategory, description ,location,price}) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-  
-  if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not configured');
-  }
 
+export async function generateDescription({ title, category, subCategory, description, location, price }) {
   const prompt = `Clean up and lightly improve this classified ad description. Fix grammar and flow, but keep it sounding like a real person wrote it — not a marketing pitch.
 
 Title: ${title}
@@ -585,43 +440,18 @@ Rules:
 - If the original is already decent, make only minimal changes
 - Output ONLY the final description text. No notes, explanations, labels, or extra commentary of any kind.`;
 
-
   try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        temperature: 0.4, // lower = less creative/random, more grounded
-        max_tokens: 150
-      })
+    const { content } = await chatCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.4,
+      maxTokens: 150,
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Groq API error: ${errorData.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.choices[0].message.content.trim();
-
+    return content;
   } catch (error) {
-    console.error('Groq API Error:', error);
+    console.error('AI description generation error:', error);
     throw error;
   }
 }
-
-const VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.6-27b';
-const EXTRACT_CONFIDENCE_FLOOR = 0.6;
 
 /**
  * Analyze listing photos and draft ad fields (title, category, subcategory, description).
@@ -630,10 +460,6 @@ const EXTRACT_CONFIDENCE_FLOOR = 0.6;
  * @param {{ images: Array<{ mimeType: string, base64: string }>, categories: Array<{ name: string, subCategories?: string[] }> }} params
  */
 export async function extractAdFromImages({ images, categories }) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-  if (!GROQ_API_KEY) {
-    throw new Error('GROQ_API_KEY not configured');
-  }
   if (!Array.isArray(images) || images.length === 0) {
     throw new Error('At least one image is required');
   }
@@ -645,7 +471,6 @@ export async function extractAdFromImages({ images, categories }) {
     return { name: c.name, subCategories: subs };
   });
 
-  // Compact catalog — large pretty JSON + vision often breaks Groq json mode
   const catalogText = categoryCatalog.length
     ? categoryCatalog
         .map((c) => {
@@ -690,15 +515,19 @@ Return JSON with this shape:
     { role: 'user', content },
   ];
 
-  // Avoid Groq json_object mode with vision/reasoning models — it often
-  // returns json_validate_failed. Parse JSON from free-form output instead.
-  const raw = await callGroqVision({
-    apiKey: GROQ_API_KEY,
-    model: VISION_MODEL,
+  const { content: raw } = await chatCompletionWithFallback({
     messages,
+    temperature: 0.1,
+    maxTokens: 1600,
+    acceptContent: (content) => Boolean(extractJsonObject(content)),
+    attempts: [
+      { label: 'plain', maxTokens: 1600 },
+      { label: 'json', maxTokens: 1200, responseFormat: { type: 'json_object' } },
+      { label: 'plain-long', maxTokens: 2000 },
+    ],
   });
 
-  const parsed = parseVisionJson(raw);
+  const parsed = extractJsonObject(raw);
   if (!parsed) {
     throw new Error('No valid JSON in vision response');
   }
@@ -733,124 +562,12 @@ Return JSON with this shape:
     confidenceFloor: EXTRACT_CONFIDENCE_FLOOR,
   };
 
-  // If category failed matching, drop it even if model was confident
   if (parsed?.category && !matchedCategory) {
     draft.category = null;
     confidence.category = Math.min(confidence.category, 0.4);
   }
 
   return draft;
-}
-
-async function callGroqVision({ apiKey, model, messages }) {
-  const attempts = [
-    // Prefer free-form + reasoning disabled (json_object often fails on Qwen vision)
-    {
-      label: 'plain+hidden',
-      body: {
-        model,
-        messages,
-        temperature: 0.1,
-        max_tokens: 1600,
-        reasoning_format: 'hidden',
-        reasoning_effort: 'none',
-      },
-    },
-    {
-      label: 'json+hidden',
-      body: {
-        model,
-        messages,
-        temperature: 0.1,
-        max_tokens: 1200,
-        response_format: { type: 'json_object' },
-        reasoning_format: 'hidden',
-        reasoning_effort: 'none',
-      },
-    },
-    {
-      label: 'plain',
-      body: {
-        model,
-        messages,
-        temperature: 0.1,
-        max_tokens: 2000,
-      },
-    },
-  ];
-
-  let lastError = 'Unknown Groq vision error';
-
-  for (const attempt of attempts) {
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(attempt.body),
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        const failedGen = data.error?.failed_generation;
-        if (typeof failedGen === 'string' && failedGen.trim()) {
-          const recovered = parseVisionJson(failedGen);
-          if (recovered) {
-            console.log(`🖼️ Vision recovered JSON from failed_generation (${attempt.label})`);
-            return JSON.stringify(recovered);
-          }
-        }
-        lastError = data.error?.message || response.statusText || lastError;
-        console.warn(`🖼️ Vision attempt ${attempt.label} failed:`, lastError);
-        continue;
-      }
-
-      const content = String(data.choices?.[0]?.message?.content || '').trim();
-      if (content && parseVisionJson(content)) {
-        return content;
-      }
-      if (content) {
-        lastError = 'Vision returned non-JSON content';
-        console.warn(`🖼️ Vision attempt ${attempt.label}: content not parseable`);
-        continue;
-      }
-      lastError = 'Empty vision response';
-    } catch (err) {
-      lastError = err.message || String(err);
-      console.warn(`🖼️ Vision attempt ${attempt.label} threw:`, lastError);
-    }
-  }
-
-  throw new Error(`Groq vision error: ${lastError}`);
-}
-
-function parseVisionJson(raw) {
-  if (!raw || typeof raw !== 'string') return null;
-
-  let text = raw.trim();
-  // Strip reasoning / markdown wrappers from Qwen-style outputs
-  text = text.replace(/```json\s*/gi, '').replace(/```/g, '');
-  text = text.replace(/<think>[\s\S]*?(<\/think>|$)/gi, '');
-  text = text.replace(/<thinking>[\s\S]*?(<\/thinking>|$)/gi, '');
-  text = text.replace(/<\/?think>/gi, '');
-
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  const candidate = text.slice(start, end + 1);
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    try {
-      return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1'));
-    } catch {
-      return null;
-    }
-  }
 }
 
 function clampConfidence(value) {
