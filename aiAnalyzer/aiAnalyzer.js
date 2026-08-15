@@ -7,6 +7,18 @@ import {
 
 const EXTRACT_CONFIDENCE_FLOOR = 0.6;
 
+export const CONTENT_POLICY_WARNING =
+  'You will be blocked if you repeat this action.';
+
+const FOREIGN_LOCATION_RE =
+  /\b(usa|u\.s\.a|united states|uk|u\.k|united kingdom|london|new york|california|texas|florida|chicago|los angeles|manhattan|brooklyn|toronto|sydney|melbourne|paris|berlin|downtown)\b/i;
+
+const INDIA_LOCATION_RE =
+  /\b(kerala|india|bharat|thiruvananthapuram|trivandrum|tvm|kollam|pathanamthitta|alappuzha|alleppey|kottayam|idukki|ernakulam|kochi|cochin|thrissur|trichur|palakkad|palghat|malappuram|kozhikode|calicut|wayanad|kannur|cannanore|kasaragod|kasargod|tamil nadu|karnataka|mumbai|delhi|bangalore|bengaluru|hyderabad|chennai|pune|kl-?\d{1,2})\b/i;
+
+const OBSCENE_TEXT_RE =
+  /\b(nude|nudes|naked|porn|pornograph|xxx|nsfw|sexual act|sex act|genital|explicit (sex|content)|blocked content)\b/i;
+
 async function completeJson({
   messages,
   temperature,
@@ -425,29 +437,31 @@ Steps:
 }
 
 export async function generateDescription({ title, category, subCategory, description, location, price }) {
-  const prompt = `Clean up and lightly improve this classified ad description. Fix grammar and flow, but keep it sounding like a real person wrote it — not a marketing pitch.
+  const priceText = formatInrDisplay(parseInrPrice(price)) || price || '';
+  const locationText = sanitizeIndianLocation(location) || '';
+  const prompt = `Rewrite this classified ad the way a person from Kerala would actually post it on Dealr or OLX. Keep the facts. Sound like a neighbour selling something — not a brochure, chatbot, or US marketplace listing.
 
 Title: ${title}
 Category: ${category}
 Sub-category: ${subCategory}
 Original description: ${description}
-Location: ${location}
-Price: ${price}
+Location: ${locationText}
+Price: ${priceText}
+
 Rules:
-- Keep the same meaning and facts from the original
-- Price should be mentioned in the description if available
-- Location should be mentioned in the description if available
-- Sound natural and human, like someone casually selling their item
-- 2-3 sentences max
-- No exaggerated claims, buzzwords, or salesy language
-- If the original is already decent, make only minimal changes
-- Output ONLY the final description text. No notes, explanations, labels, or extra commentary of any kind.`;
+- First-person, casual, slightly clipped English. Light Kerala phrasing is fine when it fits (nalla condition, papers ready, single owner, serious buyers only, nego undu, box and bill undu). Do not overdo slang.
+- Mention price in Indian Rupees with ₹. Never use $, USD, or dollars.
+- Mention location only as a Kerala / Indian place if one is given. Never invent a US/UK city.
+- 2–4 short sentences. Concrete details only (brand, year, scratches, km, rooms, extras).
+- No marketing words (stunning, premium, must-see), no emoji, no hashtags.
+- Do not invent features that are not in the original.
+- Output ONLY the description text.`;
 
   try {
     const { content } = await chatCompletion({
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.4,
-      maxTokens: 150,
+      temperature: 0.45,
+      maxTokens: 220,
     });
     return content;
   } catch (error) {
@@ -457,8 +471,8 @@ Rules:
 }
 
 /**
- * Analyze listing photos and draft ad fields (title, category, subcategory, description).
- * Never invents price or location — those stay manual on the client.
+ * Analyze listing photos and draft ad fields for a Kerala classifieds listing.
+ * Blocks obscene images. Estimates INR price and an Indian / Kerala location.
  *
  * @param {{ images: Array<{ mimeType: string, base64: string }>, categories: Array<{ name: string, subCategories?: string[] }> }} params
  */
@@ -474,34 +488,8 @@ export async function extractAdFromImages({ images, categories }) {
     return { name: c.name, subCategories: subs };
   });
 
-  const catalogText = categoryCatalog.length
-    ? categoryCatalog
-        .map((c) => {
-          const subs = (c.subCategories || []).slice(0, 20).join('|');
-          return subs ? `${c.name}[${subs}]` : c.name;
-        })
-        .join('; ')
-    : '(none)';
-
-  const systemPrompt = `You are a marketplace listing assistant for Dealr (India classifieds).
-Analyze product photos and reply with a single JSON object only.
-No markdown fences, no commentary, no thinking tags.
-
-Rules:
-- Use ONLY what is visible or clearly readable in the images.
-- Never invent brand/model/year/condition you cannot see.
-- Never set price or location (omit them).
-- category must match an allowed category name exactly, or null.
-- subCategory must match an allowed subcategory under that category, or null.
-- title: short, specific, max 80 chars, no emoji, no price.
-- description: natural seller voice, 150-280 chars, visible facts only.
-- confidence values are numbers from 0 to 1.
-- If unsure, use null and confidence below 0.6.`;
-
-  const userText = `Allowed categories: ${catalogText}
-
-Return JSON with this shape:
-{"title":null,"category":null,"subCategory":null,"description":null,"visibleAttributes":{},"confidence":{"title":0,"category":0,"subCategory":0,"description":0},"notes":""}`;
+  const catalogText = formatCategoryCatalog(categoryCatalog);
+  const { systemPrompt, userText } = buildImageAnalysisPrompts(catalogText);
 
   const content = [
     { type: 'text', text: userText },
@@ -520,13 +508,13 @@ Return JSON with this shape:
 
   const { content: raw } = await chatCompletionWithFallback({
     messages,
-    temperature: 0.1,
-    maxTokens: 1600,
+    temperature: 0.15,
+    maxTokens: 1800,
     acceptContent: (content) => Boolean(extractJsonObject(content)),
     attempts: [
-      { label: 'plain', maxTokens: 1600 },
-      { label: 'json', maxTokens: 1200, responseFormat: { type: 'json_object' } },
-      { label: 'plain-long', maxTokens: 2000 },
+      { label: 'plain', maxTokens: 1800 },
+      { label: 'json', maxTokens: 1400, responseFormat: { type: 'json_object' } },
+      { label: 'plain-long', maxTokens: 2200 },
     ],
   });
 
@@ -535,11 +523,165 @@ Return JSON with this shape:
     throw new Error('No valid JSON in vision response');
   }
 
+  return normalizeImageExtractDraft(parsed, categoryCatalog);
+}
+
+export function formatCategoryCatalog(categoryCatalog) {
+  if (!categoryCatalog?.length) return '(none)';
+  return categoryCatalog
+    .map((c) => {
+      const subs = (c.subCategories || []).slice(0, 20).join('|');
+      return subs ? `${c.name}[${subs}]` : c.name;
+    })
+    .join('; ');
+}
+
+export function buildImageAnalysisPrompts(catalogText) {
+  const systemPrompt = `You are a Keralite posting on Dealr, a classifieds app used across Kerala, India.
+
+Inspect every photo first. Then either reject the upload or draft a listing.
+
+PROHIBITED CONTENT — check this BEFORE writing any listing:
+Reject the upload if ANY image shows:
+- nudity, sexual acts, pornography, genitals, or sexually suggestive posing
+- any sexual content involving minors (always reject)
+- gore, extreme violence, or hate imagery
+
+If prohibited:
+- Do NOT describe what is in the image
+- Do NOT invent a title, category, price, location, or description
+- Return JSON with blocked=true, every listing field null, and warning exactly:
+  "${CONTENT_POLICY_WARNING}"
+
+If the photos show a normal item for sale, write like a real person from Kerala — a neighbour on OLX — not a catalogue, chatbot, or Western marketplace.
+
+CATEGORY:
+- Pick category and subCategory ONLY from the allowed list. Use the exact names.
+- Judge the actual object (scooter vs car, fridge vs washing machine, 2BHK vs plot).
+
+PRICE — Kerala used-goods market, Indian Rupees only:
+- Estimate a fair asking price in Kerala right now.
+- Integer INR only (18500, 485000). Never USD, $, AED, or any other currency.
+- Use local rates, e.g. Activa ~₹30–50k, used iPhone 13 ~₹22–32k, 1.5-ton AC ~₹12–20k, 2018 Swift ~₹4–6 lakh.
+- If a rupee price tag is readable, use that amount.
+- price = integer rupees. priceDisplay = Indian grouping with ₹ (₹18,500 or ₹4.85 lakh).
+
+LOCATION — India / Kerala only:
+- Read KL number plates, Malayalam or English signboards, shop names, bus boards, landmarks.
+- Name a real place: locality + district, e.g. "Kazhakkoottam, Thiruvananthapuram" or "Palarivattom, Ernakulam".
+- Never output US/UK/Europe/Gulf city names, "downtown", or invented Western areas.
+- If the place is clearly another Indian state, use that Indian city or district.
+- If no place cue exists, set location to "Kerala" and keep location confidence below 0.6.
+
+VOICE:
+- First person, casual, slightly clipped. Light Malayalam flavour people actually type: "nalla condition", "papers ready", "single owner", "serious buyers only", "time pass avoid", "nego undu", "box and bill undu".
+- 3–6 concrete facts you can see (colour, brand, scratch, accessories, km, rooms).
+- Put the asking price in rupees and the place in the description when you have them.
+- 2–4 short sentences. No emoji, no hashtags, no brochure adjectives (stunning, premium, must-see).
+- Do NOT write generic filler like "This item is in good condition and perfect for anyone looking for quality."
+
+TITLE:
+- How a Keralite would name the ad: "Honda Activa 2019, single owner" or "1.5 ton Samsung AC, 3 star".
+- Max 80 chars. No emoji. No price. No dollar signs.
+
+Never invent a brand, model, year, or defect you cannot see.
+confidence values are numbers from 0 to 1. If unsure, use null and confidence below 0.6.
+JSON only. No markdown. No thinking tags.`;
+
+  const userText = `Allowed categories: ${catalogText}
+
+This is a Kerala, India listing. Price must be Indian Rupees. Location must be an Indian region.
+
+Return JSON with this shape:
+{"blocked":false,"warning":null,"title":null,"category":null,"subCategory":null,"description":null,"price":null,"priceDisplay":null,"location":null,"visibleAttributes":{},"confidence":{"title":0,"category":0,"subCategory":0,"description":0,"price":0,"location":0},"notes":""}`;
+
+  return { systemPrompt, userText };
+}
+
+export function isBlockedImageResult(parsed) {
+  if (!parsed || typeof parsed !== 'object') return false;
+  if (parsed.blocked === true || parsed.blocked === 'true') return true;
+  if (String(parsed.blockReason || '').trim()) return true;
+  const blob = [parsed.warning, parsed.notes, parsed.title, parsed.description]
+    .filter(Boolean)
+    .join(' ');
+  return OBSCENE_TEXT_RE.test(blob);
+}
+
+export function parseInrPrice(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 10 && value <= 1e9) {
+    return Math.round(value);
+  }
+
+  const text = String(value).trim();
+  if (!text || /\$|usd|dollar|aed|gbp|eur/i.test(text)) return null;
+
+  const lakh = text.match(/([\d.]+)\s*lakh/i);
+  if (lakh) {
+    const n = Math.round(Number(lakh[1]) * 100000);
+    return n >= 10 && n <= 1e9 ? n : null;
+  }
+
+  const crore = text.match(/([\d.]+)\s*cr(ore)?/i);
+  if (crore) {
+    const n = Math.round(Number(crore[1]) * 10000000);
+    return n >= 10 && n <= 1e9 ? n : null;
+  }
+
+  const digits = text.replace(/[₹rs.\s,]/gi, '');
+  const n = Number(digits);
+  if (!Number.isFinite(n) || n < 10 || n > 1e9) return null;
+  return Math.round(n);
+}
+
+export function formatInrDisplay(amount) {
+  const n = parseInrPrice(amount);
+  if (!n) return null;
+  if (n >= 10000000) {
+    const cr = n / 10000000;
+    return `₹${trimDecimal(cr)} crore`;
+  }
+  if (n >= 100000) {
+    const lakh = n / 100000;
+    return `₹${trimDecimal(lakh)} lakh`;
+  }
+  return `₹${n.toLocaleString('en-IN')}`;
+}
+
+export function sanitizeIndianLocation(value) {
+  const text = cleanText(value, 80);
+  if (!text) return null;
+  if (FOREIGN_LOCATION_RE.test(text) && !INDIA_LOCATION_RE.test(text)) return null;
+  return text;
+}
+
+export function normalizeImageExtractDraft(parsed, categoryCatalog = []) {
+  if (isBlockedImageResult(parsed)) {
+    return {
+      blocked: true,
+      warning: CONTENT_POLICY_WARNING,
+      title: null,
+      category: null,
+      subCategory: null,
+      description: null,
+      price: null,
+      priceDisplay: null,
+      location: null,
+      visibleAttributes: {},
+      confidence: emptyConfidence(),
+      notes: '',
+      confidenceFloor: EXTRACT_CONFIDENCE_FLOOR,
+    };
+  }
+
   const confidence = {
     title: clampConfidence(parsed?.confidence?.title),
     category: clampConfidence(parsed?.confidence?.category),
     subCategory: clampConfidence(parsed?.confidence?.subCategory),
     description: clampConfidence(parsed?.confidence?.description),
+    price: clampConfidence(parsed?.confidence?.price),
+    location: clampConfidence(parsed?.confidence?.location),
   };
 
   const matchedCategory = matchCategoryName(parsed?.category, categoryCatalog);
@@ -551,14 +693,24 @@ Return JSON with this shape:
 
   const title = cleanText(parsed?.title, 90);
   const description = cleanText(parsed?.description, 600);
+  const price = parseInrPrice(parsed?.price ?? parsed?.priceDisplay);
+  const location = sanitizeIndianLocation(parsed?.location);
 
   const draft = {
+    blocked: false,
+    warning: null,
     title: confidence.title >= EXTRACT_CONFIDENCE_FLOOR ? title : null,
     category: confidence.category >= EXTRACT_CONFIDENCE_FLOOR ? matchedCategory : null,
     subCategory:
       confidence.subCategory >= EXTRACT_CONFIDENCE_FLOOR ? matchedSub : null,
     description:
       confidence.description >= EXTRACT_CONFIDENCE_FLOOR ? description : null,
+    price: confidence.price >= EXTRACT_CONFIDENCE_FLOOR ? price : null,
+    priceDisplay:
+      confidence.price >= EXTRACT_CONFIDENCE_FLOOR
+        ? formatInrDisplay(price) || cleanText(parsed?.priceDisplay, 40)
+        : null,
+    location: confidence.location >= EXTRACT_CONFIDENCE_FLOOR ? location : null,
     visibleAttributes: sanitizeAttributes(parsed?.visibleAttributes),
     confidence,
     notes: cleanText(parsed?.notes, 200) || '',
@@ -570,7 +722,24 @@ Return JSON with this shape:
     confidence.category = Math.min(confidence.category, 0.4);
   }
 
+  if (draft.price == null) draft.priceDisplay = null;
+
   return draft;
+}
+
+function emptyConfidence() {
+  return {
+    title: 0,
+    category: 0,
+    subCategory: 0,
+    description: 0,
+    price: 0,
+    location: 0,
+  };
+}
+
+function trimDecimal(value) {
+  return String(Number(value.toFixed(2))).replace(/\.0+$/, '');
 }
 
 function clampConfidence(value) {

@@ -1026,6 +1026,17 @@ export const extractAdFromImagesUsingAI = async (req, res) => {
     console.log(`🖼️ Extracting ad draft from ${images.length} image(s)...`);
     const draft = await extractAdFromImages({ images, categories });
 
+    if (draft.blocked) {
+      console.warn('🚫 Image analysis blocked for prohibited content');
+      return res.status(400).json({
+        success: false,
+        blocked: true,
+        error: 'This image is not allowed.',
+        warning: draft.warning,
+        data: draft,
+      });
+    }
+
     // Polish description with existing text model when we have enough context
     if (draft.title && draft.category && draft.description) {
       try {
@@ -1034,8 +1045,8 @@ export const extractAdFromImagesUsingAI = async (req, res) => {
           category: draft.category,
           subCategory: draft.subCategory || 'General',
           description: draft.description,
-          location: '',
-          price: '',
+          location: draft.location || '',
+          price: draft.priceDisplay || draft.price || '',
         });
         const originalLen = draft.description.length;
         if (
@@ -1054,9 +1065,14 @@ export const extractAdFromImagesUsingAI = async (req, res) => {
       }
     }
 
-    const filledFields = ['title', 'category', 'subCategory', 'description'].filter(
-      (key) => draft[key],
-    );
+    const filledFields = [
+      'title',
+      'category',
+      'subCategory',
+      'description',
+      'price',
+      'location',
+    ].filter((key) => draft[key] != null && draft[key] !== '');
 
     console.log(`✅ Vision draft ready (${filledFields.join(', ') || 'no high-confidence fields'})`);
 
