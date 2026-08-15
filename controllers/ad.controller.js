@@ -5,6 +5,7 @@ import AdCategory from "../models/ad.category.model.js";
 import ReportReason from "../models/reportReason.model.js";
 import {analyzeDescription,aiSearchAds,analyzeChatForFraud,generateDescription,extractAdFromImages} from "../aiAnalyzer/aiAnalyzer.js";
 import { sendChatNotification, sendReviewPromptNotification } from "../services/pushService.js";
+import { notifyUsersOfNewAd, recordAdViewHistory } from "../services/categoryMatchNotify.service.js";
 import { PUBLIC_TRUST_SELECT, recalculateUserTrust, formatTrustProfile } from "../services/trustScore.service.js";
 import { ensureLocationExists } from "../services/location.service.js";
 import { getSocket } from "../socket.js";
@@ -656,6 +657,9 @@ export const createAd = async (req, res) => {
     // Pre-compute and store the AI summary so ad detail loads can read it from
     // the DB instead of regenerating it on every view.
     refreshAdSummary(ad._id);
+    notifyUsersOfNewAd(ad).catch((err) => {
+      console.error("New-ad category notify failed:", err?.message || err);
+    });
 
     const controllerMs = Date.now() - controllerStart;
     const totalMs = Date.now() - requestStart;
@@ -1173,11 +1177,7 @@ export const incrementViews = async (req, res) => {
     if (userId && String(ad.seller) !== String(userId)) {
       const user = await User.findById(userId);
       if (user) {
-        user.lastViewedAds = user.lastViewedAds || [];
-        if (!user.lastViewedAds.includes(adId)) {
-          user.lastViewedAds.push(adId);
-          await user.save();
-        }
+        await recordAdViewHistory(user, ad);
       }
     }
 

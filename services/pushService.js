@@ -148,3 +148,47 @@ export async function sendReengagementNotification(toFcmToken, { title, body, da
     return { sent: false, error: error?.code || error?.message || "send_failed" };
   }
 }
+
+/**
+ * Immediate push when a new ad is posted in the category the user
+ * views most (from their last 5 viewed ads).
+ */
+export async function sendNewAdInCategoryNotification(toFcmToken, {
+  title,
+  body,
+  adId,
+  categoryId,
+  categoryName,
+}) {
+  try {
+    const message = {
+      token: toFcmToken,
+      notification: {
+        title,
+        body,
+      },
+      data: {
+        type: "NEW_AD_IN_CATEGORY",
+        campaign: "new_ad_in_category",
+        screen: "ad",
+        adId: String(adId || ""),
+        categoryId: String(categoryId || ""),
+        categoryName: categoryName || "",
+      },
+      android: {
+        collapseKey: "new_ad_in_category",
+        notification: {
+          channelId: "default",
+          tag: "new_ad_in_category",
+        },
+      },
+    };
+    await messaging.send(message);
+    return { sent: true };
+  } catch (error) {
+    console.error("Error sending new-ad category notification:", error?.code || error?.message || error);
+    logRejectedToken(error);
+    await clearInvalidFcmToken(toFcmToken, error);
+    return { sent: false, error: error?.code || error?.message || "send_failed" };
+  }
+}
