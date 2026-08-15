@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { touchLastActive } from "../services/activity.service.js";
 
 export default (req, res, next) => {
   const token = req.header("Authorization")?.replace("Bearer ", "");
@@ -7,6 +8,7 @@ export default (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
+    touchLastActive(decoded.id);
     next();
   } catch (err) {
     res.status(401).json({ message: "Token invalid" });

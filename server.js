@@ -13,6 +13,7 @@ import adRoutes from "./routes/ad.routes.js";
 import aiRoutes from "./routes/ai.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import reviewRoutes from "./routes/review.routes.js";
+import jobRoutes from "./routes/job.routes.js";
 
 
 connectDB();
@@ -39,6 +40,7 @@ app.use("/api/ads", adRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reviews", reviewRoutes);
+app.use("/api/jobs", jobRoutes);
 
 initSocket(server);
 

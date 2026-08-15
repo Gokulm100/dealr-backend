@@ -27,6 +27,15 @@ const userSchema = new mongoose.Schema(
     lastLogin: {
       type: Date,
     },
+    lastActiveAt: {
+      type: Date,
+    },
+    lastReengagementAt: {
+      type: Date,
+    },
+    lastReengagementCampaign: {
+      type: String,
+    },
     fcmToken: {
       type: String,
     },
@@ -89,5 +98,8 @@ const userSchema = new mongoose.Schema(
   },
   { versionKey: false }
 );
+
+userSchema.index({ lastActiveAt: 1 });
+userSchema.index({ lastReengagementAt: 1 });
 
 export default mongoose.model("User", userSchema);

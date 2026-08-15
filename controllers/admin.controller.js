@@ -4,7 +4,7 @@ import Report from "../models/report.model.js";
 export const getUsers = async (req, res) => {
   try {
     const users = await User.find()
-      .select("name email profilePic isActive isBlocked reportCounter createdAt lastLogin")
+      .select("name email profilePic isActive isBlocked reportCounter createdAt lastLogin lastActiveAt")
       .sort({ createdAt: -1 });
 
     res.json({ users });

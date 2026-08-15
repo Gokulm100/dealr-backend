@@ -1,5 +1,6 @@
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
+import { touchLastActive } from "./services/activity.service.js";
 
 let ioInstance = null;
 
@@ -32,6 +33,7 @@ export const initSocket = (httpServer) => {
       return next(new Error("unauthorized"));
     }
     socket.data.userId = userId;
+    touchLastActive(userId);
     next();
   });
 

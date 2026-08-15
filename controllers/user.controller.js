@@ -13,6 +13,7 @@ import {
   recalculateUserTrust,
   formatTrustProfile,
 } from "../services/trustScore.service.js";
+import { touchLastActive } from "../services/activity.service.js";
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -53,12 +54,15 @@ export const loginUser = async (req, res) => {
         name,
         email,
         profilePic: picture,
+        lastLogin: new Date(),
+        lastActiveAt: new Date(),
       });
       await recalculateUserTrust(user._id);
       // Fetch again to populate lastViewedAds (should be empty on creation)
       user = await User.findById(user._id).populate('lastViewedAds');
     } else {
       user.lastLogin = new Date();
+      user.lastActiveAt = new Date();
       await user.save();
       user = await User.findById(user._id).populate('lastViewedAds');
     }
@@ -101,6 +105,7 @@ export const saveFcmToken = async (req, res) => {
     );
 
     user.fcmToken = fcmToken;
+    user.lastActiveAt = new Date();
     await user.save();
 
     console.log(`FCM token saved for user ${userId}`);
@@ -109,6 +114,11 @@ export const saveFcmToken = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+export const pingActivity = async (req, res) => {
+  touchLastActive(req.user.id);
+  res.json({ ok: true });
+};
+
 export const getLatestConsentVersion = async (req, res) => {
   try {
     let latestVersionDoc = await ConsentVersion.findOne().sort({ version: -1 });
