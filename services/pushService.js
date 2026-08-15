@@ -159,6 +159,7 @@ export async function sendNewAdInCategoryNotification(toFcmToken, {
   adId,
   categoryId,
   categoryName,
+  subCategory,
 }) {
   try {
     const message = {
@@ -174,6 +175,7 @@ export async function sendNewAdInCategoryNotification(toFcmToken, {
         adId: String(adId || ""),
         categoryId: String(categoryId || ""),
         categoryName: categoryName || "",
+        subCategory: subCategory || "",
       },
       android: {
         collapseKey: "new_ad_in_category",

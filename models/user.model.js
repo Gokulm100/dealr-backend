@@ -93,6 +93,10 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "AdCategory",
     },
+    topViewedSubCategory: {
+      type: String,
+      default: null,
+    },
     favoriteAds: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -105,6 +109,6 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ lastActiveAt: 1 });
 userSchema.index({ lastReengagementAt: 1 });
-userSchema.index({ topViewedCategory: 1 });
+userSchema.index({ topViewedCategory: 1, topViewedSubCategory: 1 });
 
 export default mongoose.model("User", userSchema);

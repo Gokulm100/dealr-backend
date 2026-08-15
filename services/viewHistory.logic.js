@@ -22,12 +22,30 @@ export function recordLastViewedAdIds(existingIds = [], adId, limit = LAST_VIEWE
   return next.slice(-limit);
 }
 
+export function normalizeSubCategory(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function interestKey(categoryId, subCategory) {
+  const category = asIdString(categoryId);
+  if (!category) return "";
+  return `${category}::${normalizeSubCategory(subCategory)}`;
+}
+
+export function parseInterestKey(key) {
+  if (!key || !key.includes("::")) return null;
+  const separator = key.indexOf("::");
+  return {
+    categoryId: key.slice(0, separator),
+    subCategory: key.slice(separator + 2),
+  };
+}
+
 /**
- * Category the user visited most among the given ids (recency order).
- * Ties go to the category they viewed most recently.
+ * Most common value in recency order. Ties go to the most recent.
  */
-export function topCategoryId(categoryIdsInRecencyOrder = []) {
-  const ids = (categoryIdsInRecencyOrder || []).map(asIdString).filter(Boolean);
+export function topCategoryId(valuesInRecencyOrder = []) {
+  const ids = (valuesInRecencyOrder || []).map(asIdString).filter(Boolean);
   if (!ids.length) return null;
 
   const counts = new Map();
@@ -50,12 +68,25 @@ export function topCategoryId(categoryIdsInRecencyOrder = []) {
   return best;
 }
 
-export function topCategoryFromViewedAds(lastViewedAdIds, categoryByAdId, limit = LAST_VIEWED_LIMIT) {
-  const recent = recordLastViewedAdIds(lastViewedAdIds, null, limit);
-  const categoryIds = recent
-    .map((adId) => asIdString(categoryByAdId.get(adId)))
+export function topInterest(interests = []) {
+  const keys = (interests || [])
+    .map((item) => interestKey(item?.categoryId ?? item?.category, item?.subCategory))
     .filter(Boolean);
-  return topCategoryId(categoryIds);
+  return parseInterestKey(topCategoryId(keys));
+}
+
+export function topInterestFromViewedAds(lastViewedAdIds, interestByAdId, limit = LAST_VIEWED_LIMIT) {
+  const recent = recordLastViewedAdIds(lastViewedAdIds, null, limit);
+  const interests = recent
+    .map((adId) => interestByAdId.get(adId))
+    .filter((item) => item && (item.categoryId || item.category));
+  return topInterest(interests);
+}
+
+export function interestsMatch(userInterest, adInterest) {
+  if (!userInterest?.categoryId || !adInterest?.categoryId) return false;
+  if (asIdString(userInterest.categoryId) !== asIdString(adInterest.categoryId)) return false;
+  return normalizeSubCategory(userInterest.subCategory) === normalizeSubCategory(adInterest.subCategory);
 }
 
 export function formatInrShort(price) {
@@ -64,9 +95,11 @@ export function formatInrShort(price) {
   return `₹${Math.round(amount).toLocaleString("en-IN")}`;
 }
 
-export function buildNewAdCategoryCopy({ categoryName, title, location, price } = {}) {
+export function buildNewAdCategoryCopy({ categoryName, subCategory, title, location, price } = {}) {
   const category = (categoryName || "").trim();
-  const heading = category ? `New ${category} listing` : "New listing";
+  const sub = String(subCategory || "").trim();
+  const label = [category, sub].filter(Boolean).join(" · ");
+  const heading = label ? `New ${label} listing` : "New listing";
   const parts = [];
   if (title) parts.push(title);
   if (location) parts.push(`in ${location}`);
