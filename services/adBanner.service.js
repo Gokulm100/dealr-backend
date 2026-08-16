@@ -18,11 +18,11 @@ function isCloudinaryConfigured() {
 }
 
 /**
- * Build a colored title/description banner and upload it so listings without
+ * Build a colored title/price/location banner and upload it so listings without
  * photos still have a real image URL for cards, chat, and reviews.
  */
-export async function createAdBannerImage({ title, description } = {}) {
-  const svg = buildAdBannerSvg({ title, description });
+export async function createAdBannerImage({ title, price, location } = {}) {
+  const svg = buildAdBannerSvg({ title, price, location });
 
   if (!isCloudinaryConfigured()) {
     console.warn("createAdBannerImage skipped: Cloudinary is not configured");

@@ -5,6 +5,7 @@ import {
   buildAdBannerSvg,
   collectUploadedImageUrls,
   escapeXml,
+  formatBannerPrice,
   isGeneratedBannerUrl,
   shouldGenerateAdBanner,
   truncateText,
@@ -88,23 +89,43 @@ assert.equal(
     existingImages: ["https://res.cloudinary.com/demo/image/upload/dealr/banners/old.png"],
     hasGeneratedBanner: true,
     titleChanged: false,
-    descriptionChanged: false,
+    locationChanged: false,
   }),
   false
 );
+assert.equal(
+  shouldGenerateAdBanner({
+    uploadedUrls: [],
+    existingImages: ["https://res.cloudinary.com/demo/image/upload/dealr/banners/old.png"],
+    hasGeneratedBanner: true,
+    priceChanged: true,
+  }),
+  true
+);
+
+assert.equal(formatBannerPrice(18500), "₹18,500");
+assert.equal(formatBannerPrice("45000"), "₹45,000");
+assert.equal(formatBannerPrice(""), "");
+assert.equal(formatBannerPrice(null), "");
 
 const escapedTitle = 'Honda <Activa> & "6G"';
 const svg = buildAdBannerSvg({
   title: escapedTitle,
+  price: 45000,
+  location: "Kazhakkoottam, Thiruvananthapuram",
   description: "Well maintained scooter. Single owner. Insurance till next March.",
 });
 assert.match(svg, /<svg /);
+assert.match(svg, /text-anchor="middle"/);
+assert.match(svg, /font-size="72"/);
 assert.match(svg, /Honda &lt;Activa&gt; &amp; &quot;6G&quot;/);
-assert.match(svg, /Well maintained scooter/);
+assert.match(svg, /₹45,000/);
+assert.match(svg, /Kazhakkoottam/);
+assert.doesNotMatch(svg, /Well maintained scooter/);
 assert.match(svg, new RegExp(`stop-color="${bannerColorsForTitle(escapedTitle).from}"`));
 assert.doesNotMatch(svg, /<Honda/);
 
-const untitled = buildAdBannerSvg({ title: "   ", description: "" });
+const untitled = buildAdBannerSvg({ title: "   ", price: "", location: "" });
 assert.match(untitled, /Untitled ad/);
 
 console.log("adBanner.logic tests passed");

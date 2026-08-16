@@ -17,10 +17,10 @@ export const BANNER_PALETTE = [
   { from: "#7B241C", to: "#4A1611" },
 ];
 
-const TITLE_MAX_CHARS = 28;
+const TITLE_MAX_CHARS = 22;
 const TITLE_MAX_LINES = 3;
-const DESCRIPTION_MAX_CHARS = 42;
-const DESCRIPTION_MAX_LINES = 6;
+const LOCATION_MAX_CHARS = 32;
+const LOCATION_MAX_LINES = 2;
 
 export function escapeXml(value) {
   return String(value ?? "")
@@ -101,12 +101,14 @@ export function shouldGenerateAdBanner({
   existingImages = [],
   hasGeneratedBanner = false,
   titleChanged = false,
-  descriptionChanged = false,
+  priceChanged = false,
+  locationChanged = false,
 } = {}) {
+  const contentChanged = titleChanged || priceChanged || locationChanged;
   if (uploadedUrls.length > 0) return false;
   if (!existingImages.length) return true;
-  if (hasGeneratedBanner && (titleChanged || descriptionChanged)) return true;
-  if (existingImages.every(isGeneratedBannerUrl) && (titleChanged || descriptionChanged)) {
+  if (hasGeneratedBanner && contentChanged) return true;
+  if (existingImages.every(isGeneratedBannerUrl) && contentChanged) {
     return true;
   }
   return false;
@@ -121,18 +123,33 @@ function tspanLines(lines, x, startY, lineHeight) {
     .join("");
 }
 
-export function buildAdBannerSvg({ title, description } = {}) {
+export function formatBannerPrice(price) {
+  if (price == null || price === "") return "";
+  const amount = Number(price);
+  if (!Number.isFinite(amount)) return "";
+  return `₹${Math.round(amount).toLocaleString("en-IN")}`;
+}
+
+export function buildAdBannerSvg({ title, price, location } = {}) {
   const safeTitle = String(title ?? "").trim() || "Untitled ad";
-  const safeDescription = String(description ?? "").replace(/\s+/g, " ").trim();
+  const priceText = formatBannerPrice(price);
+  const locationLines = wrapText(location, LOCATION_MAX_CHARS, LOCATION_MAX_LINES);
   const { from, to } = bannerColorsForTitle(safeTitle);
   const titleLines = wrapText(safeTitle, TITLE_MAX_CHARS, TITLE_MAX_LINES);
-  const descriptionLines = wrapText(safeDescription, DESCRIPTION_MAX_CHARS, DESCRIPTION_MAX_LINES);
 
-  const paddingX = 80;
-  const titleStartY = 280;
-  const titleLineHeight = 70;
-  const dividerY = titleStartY + titleLines.length * titleLineHeight + 16;
-  const descriptionStartY = dividerY + 62;
+  const centerX = BANNER_WIDTH / 2;
+  const titleLineHeight = 88;
+  const priceLineHeight = 56;
+  const locationLineHeight = 50;
+  const hasMeta = Boolean(priceText || locationLines.length);
+  const titleBlockHeight = titleLines.length * titleLineHeight;
+  const metaBlockHeight = hasMeta
+    ? 28 + 5 + 36 + (priceText ? priceLineHeight : 0) + (locationLines.length ? locationLines.length * locationLineHeight : 0)
+    : 0;
+  const titleStartY = Math.round((BANNER_HEIGHT - titleBlockHeight - metaBlockHeight) / 2) + 64;
+  const dividerY = titleStartY + titleLines.length * titleLineHeight - 18;
+  const priceY = dividerY + 58;
+  const locationStartY = priceText ? priceY + priceLineHeight : dividerY + 58;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${BANNER_WIDTH}" height="${BANNER_HEIGHT}" viewBox="0 0 ${BANNER_WIDTH} ${BANNER_HEIGHT}" role="img" aria-label="${escapeXml(safeTitle)}">
@@ -145,11 +162,20 @@ export function buildAdBannerSvg({ title, description } = {}) {
   <rect width="${BANNER_WIDTH}" height="${BANNER_HEIGHT}" fill="url(#adBannerBg)"/>
   <circle cx="1080" cy="90" r="200" fill="#ffffff" fill-opacity="0.07"/>
   <circle cx="80" cy="820" r="230" fill="#ffffff" fill-opacity="0.05"/>
-  <text x="${paddingX}" y="${titleStartY}" fill="#ffffff" font-family="Noto Sans Malayalam, Noto Sans, Arial, sans-serif" font-size="56" font-weight="700">${tspanLines(titleLines, paddingX, titleStartY, titleLineHeight)}</text>
-  <rect x="${paddingX}" y="${dividerY}" width="72" height="5" rx="2" fill="#ffffff" fill-opacity="0.55"/>
+  <text text-anchor="middle" x="${centerX}" y="${titleStartY}" fill="#ffffff" font-family="Noto Sans Malayalam, Noto Sans, Arial, sans-serif" font-size="72" font-weight="700">${tspanLines(titleLines, centerX, titleStartY, titleLineHeight)}</text>
   ${
-    descriptionLines.length
-      ? `<text x="${paddingX}" y="${descriptionStartY}" fill="#ffffff" fill-opacity="0.88" font-family="Noto Sans Malayalam, Noto Sans, Arial, sans-serif" font-size="30" font-weight="400">${tspanLines(descriptionLines, paddingX, descriptionStartY, 44)}</text>`
+    hasMeta
+      ? `<rect x="${centerX - 36}" y="${dividerY}" width="72" height="5" rx="2" fill="#ffffff" fill-opacity="0.55"/>`
+      : ""
+  }
+  ${
+    priceText
+      ? `<text text-anchor="middle" x="${centerX}" y="${priceY}" fill="#ffffff" font-family="Noto Sans Malayalam, Noto Sans, Arial, sans-serif" font-size="42" font-weight="700">${escapeXml(priceText)}</text>`
+      : ""
+  }
+  ${
+    locationLines.length
+      ? `<text text-anchor="middle" x="${centerX}" y="${locationStartY}" fill="#ffffff" fill-opacity="0.9" font-family="Noto Sans Malayalam, Noto Sans, Arial, sans-serif" font-size="36" font-weight="500">${tspanLines(locationLines, centerX, locationStartY, locationLineHeight)}</text>`
       : ""
   }
 </svg>`;

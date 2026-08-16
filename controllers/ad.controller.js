@@ -616,12 +616,15 @@ export const editAd = async (req, res) => {
       updateData.hasGeneratedBanner = false;
     } else {
       const nextTitle = updateData.title ?? existingAd.title;
-      const nextDescription = updateData.description ?? existingAd.description;
+      const nextPrice = updateData.price ?? existingAd.price;
+      const nextLocation = updateData.location ?? existingAd.location;
       const titleChanged =
         updateData.title != null && String(updateData.title) !== String(existingAd.title);
-      const descriptionChanged =
-        updateData.description != null &&
-        String(updateData.description) !== String(existingAd.description);
+      const priceChanged =
+        updateData.price != null && Number(updateData.price) !== Number(existingAd.price);
+      const locationChanged =
+        updateData.location != null &&
+        String(updateData.location) !== String(existingAd.location);
 
       if (
         shouldGenerateAdBanner({
@@ -629,12 +632,14 @@ export const editAd = async (req, res) => {
           existingImages: existingAd.images || [],
           hasGeneratedBanner: existingAd.hasGeneratedBanner,
           titleChanged,
-          descriptionChanged,
+          priceChanged,
+          locationChanged,
         })
       ) {
         const bannerUrl = await createAdBannerImage({
           title: nextTitle,
-          description: nextDescription,
+          price: nextPrice,
+          location: nextLocation,
         });
         if (bannerUrl) {
           updateData.images = [bannerUrl];
@@ -672,7 +677,7 @@ export const createAd = async (req, res) => {
     console.log("[POST] /api/ads/postAdd - Body:", req.body);
     console.log("[POST] /api/ads/postAdd - Files:", req.files);
     // Handle image upload. Ads posted without a photo get a colored
-    // title/description banner so cards and chat still have an image.
+    // title/price/location banner so cards and chat still have an image.
     const imageUrls = collectUploadedImageUrls(req.files);
     let hasGeneratedBanner = false;
 
@@ -683,7 +688,8 @@ export const createAd = async (req, res) => {
     if (!imageUrls.length) {
       const bannerUrl = await createAdBannerImage({
         title: adData.title,
-        description: adData.description,
+        price: adData.price,
+        location: adData.location,
       });
       if (bannerUrl) {
         imageUrls.push(bannerUrl);
