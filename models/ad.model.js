@@ -8,6 +8,8 @@ const adSchema = new mongoose.Schema(
         category: { type: mongoose.Schema.Types.ObjectId, ref: "AdCategory", required: true },
         subCategory: { type: String, required: false },
         images: [{ type: String, required: true }],
+        // True when images[0] is a generated title/description banner, not a user photo.
+        hasGeneratedBanner: { type: Boolean, default: false },
         description: { type: String, required: true },
         aiSummary: { type: mongoose.Schema.Types.Mixed, default: null },
         seller: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

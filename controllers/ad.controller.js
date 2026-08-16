@@ -8,6 +8,11 @@ import { sendChatNotification, sendReviewPromptNotification } from "../services/
 import { notifyUsersOfNewAd, recordAdViewHistory } from "../services/categoryMatchNotify.service.js";
 import { PUBLIC_TRUST_SELECT, recalculateUserTrust, formatTrustProfile } from "../services/trustScore.service.js";
 import { ensureLocationExists } from "../services/location.service.js";
+import { createAdBannerImage } from "../services/adBanner.service.js";
+import {
+  collectUploadedImageUrls,
+  shouldGenerateAdBanner,
+} from "../services/adBanner.logic.js";
 import { getSocket } from "../socket.js";
 import mongoose from "mongoose";
 
@@ -594,16 +599,49 @@ export const editAd = async (req, res) => {
   try {
     // console.log("[PUT] /api/ads/edit/:id - Body:", req.body);
     const adId = req.params.id;
+    const existingAd = await Ad.findById(adId);
+    if (!existingAd) return res.status(404).json({ message: "Ad not found" });
+
     // Collect update data
     const updateData = { ...req.body };
-    // If new images are uploaded, handle them
-    console.log("Updating ad with files:", adId, "with data:", req.files);
-    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
-      updateData.images = req.files.map(file => file.path || file.location || file.url);
-    }
-    // Prevent changing the seller or _id
+    // Prevent changing the seller, _id, or client-supplied banner flag
     delete updateData.seller;
     delete updateData._id;
+    delete updateData.hasGeneratedBanner;
+    // If new images are uploaded, handle them
+    console.log("Updating ad with files:", adId, "with data:", req.files);
+    const uploadedUrls = collectUploadedImageUrls(req.files);
+    if (uploadedUrls.length > 0) {
+      updateData.images = uploadedUrls;
+      updateData.hasGeneratedBanner = false;
+    } else {
+      const nextTitle = updateData.title ?? existingAd.title;
+      const nextDescription = updateData.description ?? existingAd.description;
+      const titleChanged =
+        updateData.title != null && String(updateData.title) !== String(existingAd.title);
+      const descriptionChanged =
+        updateData.description != null &&
+        String(updateData.description) !== String(existingAd.description);
+
+      if (
+        shouldGenerateAdBanner({
+          uploadedUrls,
+          existingImages: existingAd.images || [],
+          hasGeneratedBanner: existingAd.hasGeneratedBanner,
+          titleChanged,
+          descriptionChanged,
+        })
+      ) {
+        const bannerUrl = await createAdBannerImage({
+          title: nextTitle,
+          description: nextDescription,
+        });
+        if (bannerUrl) {
+          updateData.images = [bannerUrl];
+          updateData.hasGeneratedBanner = true;
+        }
+      }
+    }
     // Update the ad
     const updatedAd = await Ad.findByIdAndUpdate(adId, updateData, { new: true });
     if (!updatedAd) return res.status(404).json({ message: "Ad not found" });
@@ -633,20 +671,30 @@ export const createAd = async (req, res) => {
   try {
     console.log("[POST] /api/ads/postAdd - Body:", req.body);
     console.log("[POST] /api/ads/postAdd - Files:", req.files);
-    // Handle image upload
-    const imageUrls = [];
-    if (req.files && Array.isArray(req.files)) {
-      for (const file of req.files) {
-        imageUrls.push(file.path || file.location || file.url);
-      }
-    }
+    // Handle image upload. Ads posted without a photo get a colored
+    // title/description banner so cards and chat still have an image.
+    const imageUrls = collectUploadedImageUrls(req.files);
+    let hasGeneratedBanner = false;
 
     // Remove 'id' field if present in req.body to avoid duplicate key error
     const { id, ...adData } = req.body;
+    delete adData.hasGeneratedBanner;
+
+    if (!imageUrls.length) {
+      const bannerUrl = await createAdBannerImage({
+        title: adData.title,
+        description: adData.description,
+      });
+      if (bannerUrl) {
+        imageUrls.push(bannerUrl);
+        hasGeneratedBanner = true;
+      }
+    }
 
     const ad = await Ad.create({
       ...adData,
       images: imageUrls,
+      hasGeneratedBanner,
       seller: req.user?.id,
       posted: new Date()
     });
