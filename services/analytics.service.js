@@ -13,6 +13,11 @@ import {
   toObjectIdString,
   viewerGroupKey,
 } from "./analytics.logic.js";
+import {
+  ACTIVITY_LOG_DEFAULT_LIMIT,
+  paginationMeta,
+  parsePagination,
+} from "../utils/pagination.js";
 
 function asObjectId(value) {
   const id = toObjectIdString(value);
@@ -228,12 +233,19 @@ function formatViewer(group, usersById) {
   return row;
 }
 
-export async function getAdViewersDashboard() {
-  const events = await AnalyticsEvent.find({ type: "ad_view", adId: { $ne: null } })
-    .select("adId adTitle visitorId userId createdAt")
-    .sort({ createdAt: -1 })
-    .lean();
+const VIEWERS_PER_AD = 50;
 
+function viewerIdentityExpr() {
+  return {
+    $cond: [
+      { $ne: ["$userId", null] },
+      { $concat: ["user:", { $toString: "$userId" }] },
+      { $concat: ["visitor:", { $ifNull: ["$visitorId", ""] }] },
+    ],
+  };
+}
+
+function groupViewersByAd(events) {
   const adsMap = new Map();
 
   for (const event of events) {
@@ -267,7 +279,59 @@ export async function getAdViewersDashboard() {
     if (!viewer.userId && event.userId) viewer.userId = toObjectIdString(event.userId);
   }
 
-  const adIds = [...adsMap.keys()].slice(0, 500);
+  return adsMap;
+}
+
+export async function getAdViewersDashboard({ page, limit } = {}) {
+  const paging = parsePagination({ page, limit });
+  const match = { type: "ad_view", adId: { $ne: null } };
+
+  const [facet] = await AnalyticsEvent.aggregate([
+    { $match: match },
+    {
+      $facet: {
+        ads: [
+          {
+            $group: {
+              _id: "$adId",
+              title: { $first: "$adTitle" },
+              lastViewedAt: { $max: "$createdAt" },
+              eventViews: { $sum: 1 },
+            },
+          },
+          { $sort: { lastViewedAt: -1, eventViews: -1, _id: -1 } },
+          { $skip: paging.skip },
+          { $limit: paging.limit },
+        ],
+        totalAds: [{ $group: { _id: "$adId" } }, { $count: "count" }],
+        totalViews: [{ $count: "count" }],
+        uniqueViewers: [{ $group: { _id: viewerIdentityExpr() } }, { $count: "count" }],
+      },
+    },
+  ]);
+
+  const pageRows = facet?.ads || [];
+  const total = facet?.totalAds?.[0]?.count || 0;
+  const totalViews = facet?.totalViews?.[0]?.count || 0;
+  const uniqueViewers = facet?.uniqueViewers?.[0]?.count || 0;
+  const meta = paginationMeta({ ...paging, total });
+  const stats = {
+    totalViews,
+    uniqueViewers,
+    adsViewed: total,
+  };
+
+  if (!pageRows.length) {
+    return { ads: [], stats, ...meta };
+  }
+
+  const adIds = pageRows.map((row) => row._id);
+  const events = await AnalyticsEvent.find({ type: "ad_view", adId: { $in: adIds } })
+    .select("adId adTitle visitorId userId createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const adsMap = groupViewersByAd(events);
   const adDocs = await Ad.find({ _id: { $in: adIds } })
     .select("title images views")
     .lean();
@@ -285,53 +349,38 @@ export async function getAdViewersDashboard() {
     .lean();
   const usersById = new Map(users.map((user) => [String(user._id), user]));
 
-  const ads = [...adsMap.values()]
-    .map((ad) => {
-      const doc = adById.get(ad._id);
-      const viewers = [...ad.viewers.values()]
-        .sort((a, b) => new Date(b.lastViewedAt) - new Date(a.lastViewedAt))
-        .slice(0, 50)
-        .map((viewer) => formatViewer(viewer, usersById));
-      return {
-        _id: ad._id,
-        title: doc?.title || ad.title || "",
-        images: doc?.images || [],
-        views: typeof doc?.views === "number" ? Math.max(doc.views, ad.eventViews) : ad.eventViews,
-        uniqueViewers: ad.viewers.size,
-        lastViewedAt: ad.lastViewedAt,
-        viewers,
-      };
-    })
-    .sort((a, b) => {
-      const byTime = new Date(b.lastViewedAt) - new Date(a.lastViewedAt);
-      if (byTime) return byTime;
-      return (b.views || 0) - (a.views || 0);
-    })
-    .slice(0, 100);
+  const ads = pageRows.map((row) => {
+    const adId = String(row._id);
+    const grouped = adsMap.get(adId);
+    const doc = adById.get(adId);
+    const eventViews = grouped?.eventViews ?? row.eventViews ?? 0;
+    const viewers = grouped
+      ? [...grouped.viewers.values()]
+          .sort((a, b) => new Date(b.lastViewedAt) - new Date(a.lastViewedAt))
+          .slice(0, VIEWERS_PER_AD)
+          .map((viewer) => formatViewer(viewer, usersById))
+      : [];
+    return {
+      _id: adId,
+      title: doc?.title || grouped?.title || row.title || "",
+      images: doc?.images || [],
+      views: typeof doc?.views === "number" ? Math.max(doc.views, eventViews) : eventViews,
+      uniqueViewers: grouped?.viewers.size ?? 0,
+      lastViewedAt: grouped?.lastViewedAt || row.lastViewedAt,
+      viewers,
+    };
+  });
 
-  const totalViews = ads.reduce((sum, ad) => sum + (ad.views || 0), 0);
-  const uniqueOnReturned = new Set();
-  for (const ad of ads) {
-    const source = adsMap.get(ad._id);
-    if (!source) continue;
-    for (const key of source.viewers.keys()) uniqueOnReturned.add(key);
-  }
-
-  return {
-    ads,
-    stats: {
-      totalViews,
-      uniqueViewers: uniqueOnReturned.size,
-      adsViewed: ads.length,
-    },
-  };
+  return { ads, stats, ...meta };
 }
 
-export async function getVisitorsDashboard() {
+export async function getVisitorsDashboard({ page, limit } = {}) {
+  const paging = parsePagination({ page, limit });
   const [visitors, total, signedIn] = await Promise.all([
     AnalyticsVisitor.find()
       .sort({ lastSeenAt: -1 })
-      .limit(200)
+      .skip(paging.skip)
+      .limit(paging.limit)
       .populate({ path: "userId", select: "name email profilePic" })
       .lean(),
     AnalyticsVisitor.countDocuments(),
@@ -360,24 +409,23 @@ export async function getVisitorsDashboard() {
       signedIn,
       anonymous: Math.max(0, total - signedIn),
     },
+    ...paginationMeta({ ...paging, total }),
   };
 }
 
-export async function getActivityLogPage({ page = 1, limit = 40, type } = {}) {
-  const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
-  const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 40));
+export async function getActivityLogPage({ page, limit, type } = {}) {
+  const paging = parsePagination({ page, limit }, { defaultLimit: ACTIVITY_LOG_DEFAULT_LIMIT });
   const filter = {};
   if (type && type !== "all") {
     if (EVENT_TYPE_SET.has(type)) filter.type = type;
     else filter.type = type;
   }
 
-  const skip = (safePage - 1) * safeLimit;
   const [logs, total] = await Promise.all([
     AnalyticsEvent.find(filter)
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(safeLimit)
+      .skip(paging.skip)
+      .limit(paging.limit)
       .populate({ path: "userId", select: "name email profilePic" })
       .lean(),
     AnalyticsEvent.countDocuments(filter),
@@ -403,8 +451,6 @@ export async function getActivityLogPage({ page = 1, limit = 40, type } = {}) {
         createdAt: event.createdAt,
       };
     }),
-    page: safePage,
-    total,
-    hasMore: safePage * safeLimit < total,
+    ...paginationMeta({ ...paging, total }),
   };
 }
