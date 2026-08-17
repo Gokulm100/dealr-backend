@@ -1,6 +1,6 @@
 import express from "express";
 import { getLatestMessages,createAd, getAllAds, getAdById, deleteAd,getAllAdCategories,getUserAds,editAd,createChat,getChats,getUserMessages,getBuyingMessages,getSellingMessages,summarizeAdUsingAi ,markMessagesAsSeen,incrementViews,getUsersInterestedInAd,markAdAsSold,disableAd,enableAd,generateDescriptionUsingAI,extractAdFromImagesUsingAI,reportAd,getReportReasons,createReportReason} from "../controllers/ad.controller.js";
-import authMiddleware from "../middleware/auth.js";
+import authMiddleware, { optionalAuth } from "../middleware/auth.js";
 import fileUpload, { memoryUpload } from "../middleware/fileUpload.js";
 
 const router = express.Router();
@@ -32,7 +32,7 @@ router.post("/getUserMessages", authMiddleware, getUserMessages);
 router.post("/getSellingMessages", authMiddleware, getSellingMessages);
 router.post("/getBuyingMessages", authMiddleware, getBuyingMessages);
 router.post("/markMessagesAsSeen", authMiddleware, markMessagesAsSeen);
-router.post("/incrementViews", authMiddleware, incrementViews);
+router.post("/incrementViews", optionalAuth, incrementViews);
 router.post("/getUsersInterestedInAd", getUsersInterestedInAd);
 router.post("/markAdAsSold", authMiddleware, markAdAsSold);
 router.post("/disableAd", authMiddleware, disableAd);

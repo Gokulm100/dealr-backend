@@ -1,12 +1,23 @@
 import express from "express";
-import authMiddleware from "../middleware/auth.js";
-import { getUsers, setUserActive, getReports, updateReport } from "../controllers/admin.controller.js";
+import { requireAdmin } from "../middleware/auth.js";
+import {
+  getUsers,
+  setUserActive,
+  getReports,
+  updateReport,
+  getAdViewers,
+  getVisitors,
+  getActivityLog,
+} from "../controllers/admin.controller.js";
 
 const router = express.Router();
 
-router.post("/getUsers", authMiddleware, getUsers);
-router.post("/setUserActive", authMiddleware, setUserActive);
-router.post("/getReports", authMiddleware, getReports);
-router.post("/updateReport", authMiddleware, updateReport);
+router.post("/getUsers", requireAdmin, getUsers);
+router.post("/setUserActive", requireAdmin, setUserActive);
+router.post("/getReports", requireAdmin, getReports);
+router.post("/updateReport", requireAdmin, updateReport);
+router.post("/getAdViewers", requireAdmin, getAdViewers);
+router.post("/getVisitors", requireAdmin, getVisitors);
+router.post("/getActivityLog", requireAdmin, getActivityLog);
 
 export default router;

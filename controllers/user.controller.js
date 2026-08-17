@@ -14,6 +14,7 @@ import {
   formatTrustProfile,
 } from "../services/trustScore.service.js";
 import { touchLastActive } from "../services/activity.service.js";
+import { isAdminEmail } from "../services/analytics.logic.js";
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -67,6 +68,10 @@ export const loginUser = async (req, res) => {
       user = await User.findById(user._id).populate('lastViewedAds');
     }
     console.log("User logged in:", user);
+    if (!user.isAdmin && isAdminEmail(user.email)) {
+      user.isAdmin = true;
+      await User.updateOne({ _id: user._id }, { $set: { isAdmin: true } });
+    }
     // Generate JWT for your app
     const appToken = jwt.sign({ id: user._id, email: user.email, name: user.name }, process.env.JWT_SECRET, {
       expiresIn: "7d",

@@ -1,10 +1,15 @@
 import User from "../models/user.model.js";
 import Report from "../models/report.model.js";
+import {
+  getActivityLogPage,
+  getAdViewersDashboard,
+  getVisitorsDashboard,
+} from "../services/analytics.service.js";
 
 export const getUsers = async (req, res) => {
   try {
     const users = await User.find()
-      .select("name email profilePic isActive isBlocked reportCounter createdAt lastLogin lastActiveAt")
+      .select("name email profilePic isActive isAdmin isBlocked reportCounter createdAt lastLogin lastActiveAt")
       .sort({ createdAt: -1 });
 
     res.json({ users });
@@ -85,6 +90,34 @@ export const updateReport = async (req, res) => {
       .populate("reportedUser", "name email profilePic isActive isBlocked reportCounter");
 
     res.json({ message: "Report updated successfully", report: populated });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const getAdViewers = async (req, res) => {
+  try {
+    const payload = await getAdViewersDashboard();
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const getVisitors = async (req, res) => {
+  try {
+    const payload = await getVisitorsDashboard();
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const getActivityLog = async (req, res) => {
+  try {
+    const { page, limit, type } = req.body || {};
+    const payload = await getActivityLogPage({ page, limit, type });
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

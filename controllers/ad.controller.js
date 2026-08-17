@@ -9,6 +9,7 @@ import { notifyUsersOfNewAd, recordAdViewHistory } from "../services/categoryMat
 import { PUBLIC_TRUST_SELECT, recalculateUserTrust, formatTrustProfile } from "../services/trustScore.service.js";
 import { ensureLocationExists } from "../services/location.service.js";
 import { createAdBannerImage } from "../services/adBanner.service.js";
+import { incrementAdViewCounter } from "../services/analytics.service.js";
 import {
   collectUploadedImageUrls,
   shouldGenerateAdBanner,
@@ -1216,26 +1217,24 @@ export const markMessagesAsSeen = async (req, res) => {
 };
 export const incrementViews = async (req, res) => {
   try {
-    const { adId } = req.body;
-    const userId = req.user?.id;
-    if (!adId) {
-      return res.status(400).json({ message: "adId is required" });
+    const { adId, visitorId, sessionId } = req.body;
+    const userId = req.user?.id || null;
+    const result = await incrementAdViewCounter({ adId, visitorId, userId, sessionId });
+    if (result.error) {
+      return res.status(result.status || 400).json({ message: result.error });
     }
-    const ad = await Ad.findById(adId);
-    if (!ad) {
-      return res.status(404).json({ message: "Ad not found" });
-    }
-    ad.views = (ad.views || 0) + 1;
-    await ad.save();
 
-    if (userId && String(ad.seller) !== String(userId)) {
-      const user = await User.findById(userId);
-      if (user) {
-        await recordAdViewHistory(user, ad);
+    if (userId && !result.skippedOwner) {
+      const ad = await Ad.findById(adId);
+      if (ad && String(ad.seller) !== String(userId)) {
+        const user = await User.findById(userId);
+        if (user) {
+          await recordAdViewHistory(user, ad);
+        }
       }
     }
 
-    return res.json({ message: "View count incremented", views: ad.views });
+    return res.json({ message: "View count incremented", views: result.views });
   } catch (error) {
     console.error("Error counting views:", error);
     return res.status(500).json({ message: "Internal server error" });

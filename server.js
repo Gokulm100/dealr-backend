@@ -14,6 +14,7 @@ import aiRoutes from "./routes/ai.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import reviewRoutes from "./routes/review.routes.js";
 import jobRoutes from "./routes/job.routes.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
 
 
 connectDB();
@@ -21,6 +22,7 @@ connectDB();
 const app = express();
 const server = http.createServer(app);
 
+app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
@@ -39,6 +41,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/ads", adRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/analytics", analyticsRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/jobs", jobRoutes);
 
