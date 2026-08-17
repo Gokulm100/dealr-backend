@@ -8,6 +8,7 @@ import Ad from "../models/ad.model.js";
 import AdCategory from "../models/ad.category.model.js";
 import AnalyticsEvent from "../models/analyticsEvent.model.js";
 import AnalyticsVisitor from "../models/analyticsVisitor.model.js";
+import Report from "../models/report.model.js";
 import analyticsRoutes from "../routes/analytics.routes.js";
 import adminRoutes from "../routes/admin.routes.js";
 import { optionalAuth } from "../middleware/auth.js";
@@ -67,6 +68,162 @@ function tokenFor(user) {
   });
 }
 
+function assertPagedList(data, listKey, { total, page, limit }) {
+  assert.ok(Array.isArray(data[listKey]), `${listKey} should be an array`);
+  assert.equal(data.page, page);
+  assert.equal(data.limit, limit);
+  assert.equal(data.total, total);
+  assert.equal(data.totalPages, Math.ceil(total / limit) || 0);
+  assert.equal(data.hasMore, page * limit < total);
+  assert.ok(data[listKey].length <= limit);
+}
+
+function idsOf(rows, key) {
+  return rows.map((row) => String(row[key] ?? row._id));
+}
+
+async function seedAdminListPages({ category, seller, priya }) {
+  const extraUsers = await User.insertMany(
+    Array.from({ length: 5 }, (_, index) => ({
+      googleId: `extra-user-${index}`,
+      name: `User ${index}`,
+      email: `user${index}@dealr.test`,
+    }))
+  );
+
+  const extraAds = await Ad.insertMany(
+    Array.from({ length: 4 }, (_, index) => ({
+      title: `Paged Ad ${index}`,
+      price: 1000 + index,
+      location: "Kazhakkoottam",
+      category: category._id,
+      description: `Paged listing ${index}`,
+      images: [`https://example.com/ad-${index}.jpg`],
+      seller: seller._id,
+      views: index + 1,
+    }))
+  );
+
+  const now = Date.now();
+  await AnalyticsEvent.insertMany(
+    extraAds.map((extraAd, index) => ({
+      type: "ad_view",
+      visitorId: `paged-viewer-${index}`,
+      sessionId: `paged-sess-${index}`,
+      adId: extraAd._id,
+      adTitle: extraAd.title,
+      page: "detail",
+      path: `/ads/${extraAd._id}`,
+      createdAt: new Date(now - index * 60_000),
+    }))
+  );
+
+  await AnalyticsVisitor.insertMany(
+    Array.from({ length: 4 }, (_, index) => ({
+      visitorId: `paged-visitor-${index}`,
+      firstSeenAt: new Date(now - (index + 1) * 120_000),
+      lastSeenAt: new Date(now - index * 30_000),
+      pageViews: index + 1,
+      adViews: 0,
+      lastPage: "home",
+    }))
+  );
+
+  await Report.insertMany(
+    extraUsers.slice(0, 5).map((user, index) => ({
+      reporter: priya._id,
+      reportedUser: user._id,
+      status: index % 2 === 0 ? "pending" : "resolved",
+      createdAt: new Date(now - index * 10_000),
+    }))
+  );
+}
+
+async function assertAdminPagination(base, adminToken) {
+  const userTotal = await User.countDocuments();
+  const reportTotal = await Report.countDocuments();
+  const visitorTotal = await AnalyticsVisitor.countDocuments();
+  const adViewTotal = (await AnalyticsEvent.distinct("adId", { type: "ad_view", adId: { $ne: null } })).length;
+  const logTotal = await AnalyticsEvent.countDocuments();
+
+  const usersPage1 = await json(base, "/api/admin/getUsers", {
+    token: adminToken,
+    body: { page: 1, limit: 3 },
+  });
+  assert.equal(usersPage1.status, 200);
+  assertPagedList(usersPage1.data, "users", { total: userTotal, page: 1, limit: 3 });
+  const usersPage2 = await json(base, "/api/admin/getUsers", {
+    token: adminToken,
+    body: { page: 2, limit: 3 },
+  });
+  assert.equal(usersPage2.status, 200);
+  assertPagedList(usersPage2.data, "users", { total: userTotal, page: 2, limit: 3 });
+  const userIds1 = new Set(idsOf(usersPage1.data.users, "_id"));
+  for (const id of idsOf(usersPage2.data.users, "_id")) {
+    assert.equal(userIds1.has(id), false);
+  }
+
+  const defaultUsers = await json(base, "/api/admin/getUsers", { token: adminToken, body: {} });
+  assert.equal(defaultUsers.status, 200);
+  assert.equal(defaultUsers.data.page, 1);
+  assert.ok(defaultUsers.data.users.length <= defaultUsers.data.limit);
+
+  const reportsPage1 = await json(base, "/api/admin/getReports", {
+    token: adminToken,
+    body: { page: 1, limit: 2 },
+  });
+  assert.equal(reportsPage1.status, 200);
+  assertPagedList(reportsPage1.data, "reports", { total: reportTotal, page: 1, limit: 2 });
+  const pendingReports = await json(base, "/api/admin/getReports", {
+    token: adminToken,
+    body: { status: "pending", page: 1, limit: 10 },
+  });
+  assert.equal(pendingReports.status, 200);
+  assert.ok(pendingReports.data.reports.every((row) => row.status === "pending"));
+  assert.equal(pendingReports.data.total, pendingReports.data.reports.length);
+
+  const viewersPage1 = await json(base, "/api/admin/getAdViewers", {
+    token: adminToken,
+    body: { page: 1, limit: 2 },
+  });
+  assert.equal(viewersPage1.status, 200);
+  assertPagedList(viewersPage1.data, "ads", { total: adViewTotal, page: 1, limit: 2 });
+  const viewersPage2 = await json(base, "/api/admin/getAdViewers", {
+    token: adminToken,
+    body: { page: 2, limit: 2 },
+  });
+  assert.equal(viewersPage2.status, 200);
+  assertPagedList(viewersPage2.data, "ads", { total: adViewTotal, page: 2, limit: 2 });
+  const adIds1 = new Set(idsOf(viewersPage1.data.ads, "_id"));
+  for (const id of idsOf(viewersPage2.data.ads, "_id")) {
+    assert.equal(adIds1.has(id), false);
+  }
+  assert.equal(viewersPage1.data.stats.adsViewed, adViewTotal);
+
+  const visitorsPage1 = await json(base, "/api/admin/getVisitors", {
+    token: adminToken,
+    body: { page: 1, limit: 2 },
+  });
+  assert.equal(visitorsPage1.status, 200);
+  assertPagedList(visitorsPage1.data, "visitors", { total: visitorTotal, page: 1, limit: 2 });
+  assert.equal(visitorsPage1.data.stats.total, visitorTotal);
+  const visitorsPage2 = await json(base, "/api/admin/getVisitors", {
+    token: adminToken,
+    body: { page: 2, limit: 2 },
+  });
+  const visitorIds1 = new Set(idsOf(visitorsPage1.data.visitors, "visitorId"));
+  for (const id of idsOf(visitorsPage2.data.visitors, "visitorId")) {
+    assert.equal(visitorIds1.has(id), false);
+  }
+
+  const logsPage1 = await json(base, "/api/admin/getActivityLog", {
+    token: adminToken,
+    body: { page: 1, limit: 3 },
+  });
+  assert.equal(logsPage1.status, 200);
+  assertPagedList(logsPage1.data, "logs", { total: logTotal, page: 1, limit: 3 });
+}
+
 async function main() {
   const { mode, mem } = await connectMongo();
   if (!mode) {
@@ -80,6 +237,7 @@ async function main() {
     AdCategory.deleteMany({}),
     AnalyticsEvent.deleteMany({}),
     AnalyticsVisitor.deleteMany({}),
+    Report.deleteMany({}),
   ]);
 
   const category = await AdCategory.create({ name: "Vehicles", subCategory: ["Scooters"] });
@@ -277,6 +435,9 @@ async function main() {
     const mixedViewers = await json(base, "/api/admin/getAdViewers", { token: adminToken, body: {} });
     const names = mixedViewers.data.ads[0].viewers.map((row) => row.name);
     assert.ok(names.includes(null) || names.includes("Priya") || mixedViewers.data.ads[0].viewers.length >= 1);
+
+    await seedAdminListPages({ category, seller, priya, ad });
+    await assertAdminPagination(base, adminToken);
 
     console.log("analytics.smoke tests passed");
   } finally {

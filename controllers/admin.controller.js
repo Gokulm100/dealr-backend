@@ -5,14 +5,26 @@ import {
   getAdViewersDashboard,
   getVisitorsDashboard,
 } from "../services/analytics.service.js";
+import { paginationMeta, parsePagination } from "../utils/pagination.js";
 
 export const getUsers = async (req, res) => {
   try {
-    const users = await User.find()
-      .select("name email profilePic isActive isAdmin isBlocked reportCounter createdAt lastLogin lastActiveAt")
-      .sort({ createdAt: -1 });
+    const { page, limit } = req.body || {};
+    const paging = parsePagination({ page, limit });
 
-    res.json({ users });
+    const [users, total] = await Promise.all([
+      User.find()
+        .select("name email profilePic isActive isAdmin isBlocked reportCounter createdAt lastLogin lastActiveAt")
+        .sort({ createdAt: -1 })
+        .skip(paging.skip)
+        .limit(paging.limit),
+      User.countDocuments(),
+    ]);
+
+    res.json({
+      users,
+      ...paginationMeta({ ...paging, total }),
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -45,18 +57,27 @@ export const setUserActive = async (req, res) => {
 
 export const getReports = async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, page, limit } = req.body || {};
+    const paging = parsePagination({ page, limit });
     const filter = {};
     if (status) {
       filter.status = status;
     }
 
-    const reports = await Report.find(filter)
-      .populate("reporter", "name email profilePic")
-      .populate("reportedUser", "name email profilePic isActive isBlocked reportCounter")
-      .sort({ createdAt: -1 });
+    const [reports, total] = await Promise.all([
+      Report.find(filter)
+        .populate("reporter", "name email profilePic")
+        .populate("reportedUser", "name email profilePic isActive isBlocked reportCounter")
+        .sort({ createdAt: -1 })
+        .skip(paging.skip)
+        .limit(paging.limit),
+      Report.countDocuments(filter),
+    ]);
 
-    res.json({ reports });
+    res.json({
+      reports,
+      ...paginationMeta({ ...paging, total }),
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -97,7 +118,8 @@ export const updateReport = async (req, res) => {
 
 export const getAdViewers = async (req, res) => {
   try {
-    const payload = await getAdViewersDashboard();
+    const { page, limit } = req.body || {};
+    const payload = await getAdViewersDashboard({ page, limit });
     res.json(payload);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -106,7 +128,8 @@ export const getAdViewers = async (req, res) => {
 
 export const getVisitors = async (req, res) => {
   try {
-    const payload = await getVisitorsDashboard();
+    const { page, limit } = req.body || {};
+    const payload = await getVisitorsDashboard({ page, limit });
     res.json(payload);
   } catch (err) {
     res.status(500).json({ message: err.message });
