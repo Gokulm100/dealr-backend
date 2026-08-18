@@ -4,14 +4,14 @@
  * Env:
  *   GROQ_API_KEY         required
  *   GROQ_API_BASE        default https://api.groq.com/openai/v1
- *   GROQ_TEXT_MODEL      default llama-3.3-70b-versatile
+ *   GROQ_TEXT_MODEL      default openai/gpt-oss-120b
  *   GROQ_VISION_MODEL    default qwen/qwen3.6-27b
  */
 
 const GROQ_DEFAULTS = {
   provider: 'groq',
   baseUrl: 'https://api.groq.com/openai/v1',
-  textModel: 'llama-3.3-70b-versatile',
+  textModel: 'openai/gpt-oss-120b',
   visionModel: 'qwen/qwen3.6-27b',
 };
 
@@ -54,6 +54,9 @@ export async function chatCompletion({
   if (vision) {
     body.reasoning_format = 'hidden';
     body.reasoning_effort = 'none';
+  } else if (String(body.model).startsWith('openai/gpt-oss')) {
+    body.reasoning_format = 'hidden';
+    body.reasoning_effort = 'low';
   }
 
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
