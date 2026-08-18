@@ -55,6 +55,37 @@ export const setUserActive = async (req, res) => {
   }
 };
 
+export const setUserAdmin = async (req, res) => {
+  try {
+    const { userId, isAdmin } = req.body;
+    if (!userId || typeof isAdmin !== "boolean") {
+      return res.status(400).json({ message: "userId and isAdmin (boolean) are required" });
+    }
+    if (!isAdmin && String(userId) === String(req.user?.id)) {
+      return res.status(400).json({ message: "You cannot remove your own admin access" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!isAdmin && user.isAdmin) {
+      const otherAdmins = await User.countDocuments({ isAdmin: true, _id: { $ne: user._id } });
+      if (otherAdmins === 0) {
+        return res.status(400).json({ message: "Cannot remove the last admin" });
+      }
+    }
+
+    user.isAdmin = isAdmin;
+    await user.save();
+
+    res.json({ message: "User updated successfully", user });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 export const getReports = async (req, res) => {
   try {
     const { status, page, limit } = req.body || {};
