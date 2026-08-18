@@ -32,8 +32,15 @@ withEnv({
   assert.equal(config.provider, 'groq');
   assert.equal(config.apiKey, 'gsk-test');
   assert.equal(config.baseUrl, 'https://api.groq.com/openai/v1');
-  assert.equal(config.textModel, 'llama-3.3-70b-versatile');
+  assert.equal(config.textModel, 'openai/gpt-oss-120b');
   assert.equal(config.visionModel, 'qwen/qwen3.6-27b');
+});
+
+withEnv({
+  GROQ_API_KEY: 'gsk-test',
+  GROQ_TEXT_MODEL: 'qwen/qwen3.6-27b',
+}, () => {
+  assert.equal(getLlmConfig().textModel, 'qwen/qwen3.6-27b');
 });
 
 withEnv({ GROQ_API_KEY: '' }, () => {
