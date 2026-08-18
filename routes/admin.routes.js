@@ -3,6 +3,7 @@ import { requireAdmin } from "../middleware/auth.js";
 import {
   getUsers,
   setUserActive,
+  setUserAdmin,
   getReports,
   updateReport,
   getAdViewers,
@@ -14,6 +15,7 @@ const router = express.Router();
 
 router.post("/getUsers", requireAdmin, getUsers);
 router.post("/setUserActive", requireAdmin, setUserActive);
+router.post("/setUserAdmin", requireAdmin, setUserAdmin);
 router.post("/getReports", requireAdmin, getReports);
 router.post("/updateReport", requireAdmin, updateReport);
 router.post("/getAdViewers", requireAdmin, getAdViewers);

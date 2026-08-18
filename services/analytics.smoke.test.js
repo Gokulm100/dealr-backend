@@ -224,6 +224,70 @@ async function assertAdminPagination(base, adminToken) {
   assertPagedList(logsPage1.data, "logs", { total: logTotal, page: 1, limit: 3 });
 }
 
+async function assertSetUserAdmin(base, adminToken, { admin, seller, priya }) {
+  const unauth = await json(base, "/api/admin/setUserAdmin", {
+    body: { userId: String(seller._id), isAdmin: true },
+  });
+  assert.equal(unauth.status, 401);
+
+  const forbidden = await json(base, "/api/admin/setUserAdmin", {
+    token: tokenFor(priya),
+    body: { userId: String(seller._id), isAdmin: true },
+  });
+  assert.equal(forbidden.status, 403);
+
+  const badInput = await json(base, "/api/admin/setUserAdmin", {
+    token: adminToken,
+    body: { userId: String(seller._id) },
+  });
+  assert.equal(badInput.status, 400);
+
+  const missing = await json(base, "/api/admin/setUserAdmin", {
+    token: adminToken,
+    body: { userId: "64b000000000000000000099", isAdmin: true },
+  });
+  assert.equal(missing.status, 404);
+
+  const grant = await json(base, "/api/admin/setUserAdmin", {
+    token: adminToken,
+    body: { userId: String(seller._id), isAdmin: true },
+  });
+  assert.equal(grant.status, 200);
+  assert.equal(grant.data.message, "User updated successfully");
+  assert.equal(grant.data.user.isAdmin, true);
+  assert.equal((await User.findById(seller._id)).isAdmin, true);
+
+  const selfDemote = await json(base, "/api/admin/setUserAdmin", {
+    token: adminToken,
+    body: { userId: String(admin._id), isAdmin: false },
+  });
+  assert.equal(selfDemote.status, 400);
+  assert.equal(selfDemote.data.message, "You cannot remove your own admin access");
+  assert.equal((await User.findById(admin._id)).isAdmin, true);
+
+  const revokeOther = await json(base, "/api/admin/setUserAdmin", {
+    token: adminToken,
+    body: { userId: String(seller._id), isAdmin: false },
+  });
+  assert.equal(revokeOther.status, 200);
+  assert.equal(revokeOther.data.user.isAdmin, false);
+
+  const prevEmails = process.env.ADMIN_EMAILS;
+  process.env.ADMIN_EMAILS = priya.email;
+  try {
+    const lastAdmin = await json(base, "/api/admin/setUserAdmin", {
+      token: tokenFor(priya),
+      body: { userId: String(admin._id), isAdmin: false },
+    });
+    assert.equal(lastAdmin.status, 400);
+    assert.equal(lastAdmin.data.message, "Cannot remove the last admin");
+    assert.equal((await User.findById(admin._id)).isAdmin, true);
+  } finally {
+    if (prevEmails == null) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = prevEmails;
+  }
+}
+
 async function main() {
   const { mode, mem } = await connectMongo();
   if (!mode) {
@@ -435,6 +499,8 @@ async function main() {
     const mixedViewers = await json(base, "/api/admin/getAdViewers", { token: adminToken, body: {} });
     const names = mixedViewers.data.ads[0].viewers.map((row) => row.name);
     assert.ok(names.includes(null) || names.includes("Priya") || mixedViewers.data.ads[0].viewers.length >= 1);
+
+    await assertSetUserAdmin(base, adminToken, { admin, seller, priya });
 
     await seedAdminListPages({ category, seller, priya, ad });
     await assertAdminPagination(base, adminToken);
