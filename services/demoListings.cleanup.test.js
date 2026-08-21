@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import http from "node:http";
+import express from "express";
 import mongoose from "mongoose";
 import Ad from "../models/ad.model.js";
 import Chat from "../models/chat.model.js";
@@ -6,6 +8,8 @@ import Review from "../models/review.model.js";
 import User from "../models/user.model.js";
 import AdCategory from "../models/ad.category.model.js";
 import AnalyticsEvent from "../models/analyticsEvent.model.js";
+import jobRoutes from "../routes/job.routes.js";
+import { DEMO_CLEANUP_CONFIRM } from "../controllers/job.controller.js";
 import {
   SEEDED_MARKER,
   isDemoListing,
@@ -39,12 +43,34 @@ async function connectMongo() {
   }
 }
 
+function listen(app) {
+  return new Promise((resolve) => {
+    const server = http.createServer(app);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      resolve({ server, base: `http://127.0.0.1:${port}` });
+    });
+  });
+}
+
+async function postJob(base, path, body) {
+  const res = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  return { status: res.status, data };
+}
+
 const { mode, mem } = await connectMongo();
 if (!mode) {
   console.log("demo listing matcher tests passed");
   process.exit(0);
 }
 
+let server;
+let base;
 try {
   const seller = await User.create({
     googleId: "demo-seller",
@@ -122,14 +148,35 @@ try {
   assert.equal(preview.related.analyticsEvents, 1);
   assert.equal(await Ad.countDocuments({ _id: demoAd._id }), 1);
 
-  const result = await removeDemoListings({ apply: true });
-  assert.equal(result.dryRun, false);
-  assert.equal(result.deleted, true);
-  assert.equal(result.ads, 1);
-  assert.equal(result.related.chats, 1);
-  assert.equal(result.related.reviews, 1);
-  assert.equal(result.related.analyticsEvents, 1);
-  assert.equal(result.related.usersUpdated, 1);
+  const app = express();
+  app.use(express.json());
+  app.use("/api/jobs", jobRoutes);
+  ({ server, base } = await listen(app));
+
+  const rejected = await postJob(base, "/api/jobs/cleanup-demo-listings", { apply: true });
+  assert.equal(rejected.status, 400);
+  assert.equal(await Ad.countDocuments({ _id: demoAd._id }), 1);
+
+  const dryHttp = await postJob(base, "/api/jobs/cleanup-demo-listings", {
+    confirm: DEMO_CLEANUP_CONFIRM,
+  });
+  assert.equal(dryHttp.status, 200);
+  assert.equal(dryHttp.data.dryRun, true);
+  assert.equal(dryHttp.data.ads, 1);
+  assert.equal(await Ad.countDocuments({ _id: demoAd._id }), 1);
+
+  const result = await postJob(base, "/api/jobs/cleanup-demo-listings", {
+    confirm: DEMO_CLEANUP_CONFIRM,
+    apply: true,
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.data.dryRun, false);
+  assert.equal(result.data.deleted, true);
+  assert.equal(result.data.ads, 1);
+  assert.equal(result.data.related.chats, 1);
+  assert.equal(result.data.related.reviews, 1);
+  assert.equal(result.data.related.analyticsEvents, 1);
+  assert.equal(result.data.related.usersUpdated, 1);
 
   assert.equal(await Ad.countDocuments({ _id: demoAd._id }), 0);
   assert.equal(await Ad.countDocuments({ _id: realAd._id }), 1);
@@ -147,6 +194,7 @@ try {
   assert.equal(empty.ads, 0);
   assert.equal(empty.deleted, false);
 } finally {
+  await new Promise((resolve) => (server ? server.close(resolve) : resolve()));
   await mongoose.disconnect().catch(() => {});
   if (mem) await mem.stop().catch(() => {});
 }
