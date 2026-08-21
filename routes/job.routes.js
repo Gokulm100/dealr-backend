@@ -1,5 +1,6 @@
 import express from "express";
-import { cleanupDemoListings, runReengagement } from "../controllers/job.controller.js";
+import { runReengagement } from "../controllers/job.controller.js";
+import { cleanupDemoListings } from "../controllers/demoCleanup.controller.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 
 const router = express.Router();

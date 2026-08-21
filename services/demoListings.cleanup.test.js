@@ -8,8 +8,7 @@ import Review from "../models/review.model.js";
 import User from "../models/user.model.js";
 import AdCategory from "../models/ad.category.model.js";
 import AnalyticsEvent from "../models/analyticsEvent.model.js";
-import jobRoutes from "../routes/job.routes.js";
-import { DEMO_CLEANUP_CONFIRM } from "../controllers/job.controller.js";
+import { DEMO_CLEANUP_CONFIRM, cleanupDemoListings } from "../controllers/demoCleanup.controller.js";
 import {
   SEEDED_MARKER,
   isDemoListing,
@@ -150,7 +149,7 @@ try {
 
   const app = express();
   app.use(express.json());
-  app.use("/api/jobs", jobRoutes);
+  app.post("/api/jobs/cleanup-demo-listings", cleanupDemoListings);
   ({ server, base } = await listen(app));
 
   const rejected = await postJob(base, "/api/jobs/cleanup-demo-listings", { apply: true });
