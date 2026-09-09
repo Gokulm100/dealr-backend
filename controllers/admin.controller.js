@@ -5,7 +5,31 @@ import {
   getAdViewersDashboard,
   getVisitorsDashboard,
 } from "../services/analytics.service.js";
+import { getGrowthReport } from "../services/growthMetrics.service.js";
 import { paginationMeta, parsePagination } from "../utils/pagination.js";
+
+const GROWTH_MAX_WINDOW_DAYS = 90;
+const GROWTH_MAX_LOOKBACK_DAYS = 365;
+
+function clampInt(value, fallback, min, max) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+// EXP-1: read-only growth report (MAU/WAU/DAU, new vs returning, retention
+// cohorts, marketplace funnel, and liquidity). Admin-only.
+export const getGrowthMetrics = async (req, res) => {
+  try {
+    const windowDays = clampInt(req.body?.windowDays, 30, 1, GROWTH_MAX_WINDOW_DAYS);
+    const lookbackDays = clampInt(req.body?.lookbackDays, 90, windowDays, GROWTH_MAX_LOOKBACK_DAYS);
+    const report = await getGrowthReport({ windowDays, lookbackDays });
+    res.json(report);
+  } catch (err) {
+    console.error("growth metrics failed:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
 
 export const getUsers = async (req, res) => {
   try {
