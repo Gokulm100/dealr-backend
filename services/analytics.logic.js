@@ -9,6 +9,20 @@ export const EVENT_TYPES = [
   "search",
   "chat",
   "report",
+  // EXP-1 additive marketplace-funnel events (emitted by web and mobile).
+  // Additive only: existing pipeline/collapse behavior is unchanged.
+  "user_registered",
+  "listing_creation_started",
+  "contact_seller",
+  "offer_made",
+  "offer_accepted",
+  "favorite_added",
+  "share_listing",
+  "search_result_clicked",
+  "mark_sold",
+  "review_submitted",
+  "notification_opened",
+  "user_returned",
 ];
 
 export const EVENT_TYPE_SET = new Set(EVENT_TYPES);

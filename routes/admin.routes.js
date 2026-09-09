@@ -9,6 +9,7 @@ import {
   getAdViewers,
   getVisitors,
   getActivityLog,
+  getGrowthMetrics,
 } from "../controllers/admin.controller.js";
 
 const router = express.Router();
@@ -21,5 +22,6 @@ router.post("/updateReport", requireAdmin, updateReport);
 router.post("/getAdViewers", requireAdmin, getAdViewers);
 router.post("/getVisitors", requireAdmin, getVisitors);
 router.post("/getActivityLog", requireAdmin, getActivityLog);
+router.post("/getGrowthMetrics", requireAdmin, getGrowthMetrics);
 
 export default router;
